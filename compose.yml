@@ -117,7 +117,7 @@ services:
       dockerfile: Dockerfile
     container_name: dsio-worker-ingestion
     restart: always
-    command: celery -A app.celery_app worker -Q ingestion_queue --loglevel=info
+    command: celery -A app.workers.celery_app worker -Q ingestion_queue --loglevel=info
     env_file:
       - .env
     networks:
@@ -135,7 +135,7 @@ services:
       dockerfile: Dockerfile
     container_name: dsio-worker-writeback
     restart: always
-    command: celery -A app.celery_app worker -Q writeback_queue --loglevel=info
+    command: celery -A app.workers.celery_app worker -Q writeback_queue --loglevel=info
     env_file:
       - .env
     networks:
@@ -153,7 +153,7 @@ services:
       dockerfile: Dockerfile
     container_name: dsio-scheduler-notifications
     restart: always
-    command: celery -A app.celery_app beat --loglevel=info
+    command: celery -A app.workers.celery_app beat --loglevel=info
     env_file:
       - .env
     networks:
@@ -187,7 +187,7 @@ services:
       - "8080:80"
       - "8443:443"
     volumes:
-      - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro,Z
     networks:
       - dsio-internal-net
     depends_on:
