@@ -1,15 +1,27 @@
+import uuid
 from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict
 
 
-# --- Responsable (imbriqué dans Action) ---
+# --- Responsable ---
 
-class ResponsableOut(BaseModel):
+class ResponsableBase(BaseModel):
+    display_name: str
+
+
+class ResponsableCreate(ResponsableBase):
+    email: str | None = None
+
+
+class ResponsableUpdate(BaseModel):
+    email: str | None = None
+
+
+class ResponsableOut(ResponsableBase):
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
-    display_name: str
+    id: uuid.UUID
     email: str | None = None
     is_mapped: bool
 
@@ -24,7 +36,7 @@ class ActionBase(BaseModel):
 
 
 class ActionCreate(ActionBase):
-    project_id: int
+    project_id: uuid.UUID
     responsable_names: list[str] = []  # noms bruts extraits d'Excel
 
 
@@ -38,8 +50,8 @@ class ActionUpdate(BaseModel):
 class ActionOut(ActionBase):
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
-    project_id: int
+    id: uuid.UUID
+    project_id: uuid.UUID
     status: str
     responsables: list[ResponsableOut] = []
     created_at: datetime
@@ -58,10 +70,16 @@ class ProjectCreate(ProjectBase):
     pass
 
 
+class ProjectUpdate(BaseModel):
+    name: str | None = None
+    source_file_path: str | None = None
+    is_active: bool | None = None
+
+
 class ProjectOut(ProjectBase):
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
+    id: uuid.UUID
     is_active: bool
     created_at: datetime
     last_synced_at: datetime | None = None

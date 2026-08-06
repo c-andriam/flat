@@ -1,4 +1,5 @@
 import os
+import uuid
 from datetime import datetime, timedelta
 
 from fastapi import Depends, HTTPException, status
@@ -43,7 +44,7 @@ def get_current_user(
 ) -> User:
     """Dépendance FastAPI pour protéger les routes core-api/realtime-hub."""
     payload = decode_access_token(credentials.credentials)
-    user = db.query(User).filter(User.id == int(payload["sub"])).first()
+    user = db.query(User).filter(User.id == uuid.UUID(payload["sub"])).first()
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="Compte introuvable ou désactivé")
     return user

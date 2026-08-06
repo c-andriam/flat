@@ -14,9 +14,11 @@ from sqlalchemy import (
     Table,
     Text,
 )
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from app.database import Base
+from app.models.base import UUIDMixin
 
 # ---------------------------------------------------------------------------
 # Table d'association Action <-> Responsable (many-to-many)
@@ -25,12 +27,12 @@ from app.database import Base
 action_responsables = Table(
     "action_responsables",
     Base.metadata,
-    Column("action_id", Integer, ForeignKey("actions.id", ondelete="CASCADE"), primary_key=True),
-    Column("responsable_id", Integer, ForeignKey("responsables.id", ondelete="CASCADE"), primary_key=True),
+    Column("action_id", UUID(as_uuid=True), ForeignKey("actions.id", ondelete="CASCADE"), primary_key=True),
+    Column("responsable_id", UUID(as_uuid=True), ForeignKey("responsables.id", ondelete="CASCADE"), primary_key=True),
 )
 
 
-class Responsable(Base):
+class Responsable(UUIDMixin, Base):
     """
     Personne responsable d'actions, extraite de la colonne "Resp. réalisation"
     des fichiers Excel.
@@ -43,7 +45,6 @@ class Responsable(Base):
 
     __tablename__ = "responsables"
 
-    id = Column(Integer, primary_key=True, index=True)
     display_name = Column(String(255), unique=True, nullable=False, index=True)
     email = Column(String(255), nullable=True)
     is_mapped = Column(Boolean, default=False, nullable=False)
@@ -52,21 +53,20 @@ class Responsable(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     actions = relationship("Action", secondary=action_responsables, back_populates="responsables")
-    relances = relationship("RelanceLog", back_populates="responsable")
+    relances = relationship("RelanceLog", back_populates="responsable", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         return f"<Responsable id={self.id} display_name={self.display_name!r} mapped={self.is_mapped}>"
 
 
-class Project(Base):
+class Project(UUIDMixin, Base):
     """
     Projet source, correspondant à un fichier Excel dans
-    SharePoint (ex: 07_Projets_DSIO/Projet encours/P01_xxx.xlsx).
+    SharePoint (ex: 07_Projets_DSIO/Projet encours/P01 - Nom/P01_xxx.xlsx).
     """
 
     __tablename__ = "projects"
 
-    id = Column(Integer, primary_key=True, index=True)
     code = Column(String(50), unique=True, nullable=False, index=True)  # ex: "P01"
     name = Column(String(255), nullable=False)
     source_file_path = Column(String(1024), nullable=False)  # chemin SharePoint du fichier Excel
@@ -88,7 +88,7 @@ class ActionStatus(str, enum.Enum):
     TERMINE = "termine"
 
 
-class Action(Base):
+class Action(UUIDMixin, Base):
     """
     Ligne d'action extraite du tableau Excel d'un projet
     (colonnes: N° d'actions, Actions, Resp. réalisation, %Progress, Deadline).
@@ -96,8 +96,7 @@ class Action(Base):
 
     __tablename__ = "actions"
 
-    id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
 
     numero = Column(String(50), nullable=False)  # "N° d'actions" tel quel dans Excel
     description = Column(Text, nullable=False)
@@ -126,12 +125,11 @@ class SyncStatus(str, enum.Enum):
     FAILED = "failed"
 
 
-class SyncLog(Base):
+class SyncLog(UUIDMixin, Base):
     """Historique des synchronisations SharePoint -> PostgreSQL (worker d'ingestion)."""
 
     __tablename__ = "sync_logs"
 
-    id = Column(Integer, primary_key=True, index=True)
     started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     finished_at = Column(DateTime, nullable=True)
     status = Column(Enum(SyncStatus), default=SyncStatus.RUNNING, nullable=False)
@@ -142,13 +140,12 @@ class SyncLog(Base):
         return f"<SyncLog id={self.id} status={self.status} files={self.files_processed}>"
 
 
-class RelanceLog(Base):
+class RelanceLog(UUIDMixin, Base):
     """Historique des e-mails de relance envoyés via Outlook (moteur d'alertes)."""
 
     __tablename__ = "relance_logs"
 
-    id = Column(Integer, primary_key=True, index=True)
-    responsable_id = Column(Integer, ForeignKey("responsables.id", ondelete="CASCADE"), nullable=False, index=True)
+    responsable_id = Column(UUID(as_uuid=True), ForeignKey("responsables.id", ondelete="CASCADE"), nullable=False, index=True)
     sent_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     action_ids = Column(Text, nullable=False)  # liste d'IDs d'actions concernées, sérialisée en JSON
     email_status = Column(String(50), default="sent", nullable=False)  # sent / failed

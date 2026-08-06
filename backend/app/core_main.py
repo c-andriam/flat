@@ -3,9 +3,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.database import get_db
 from app.routers import core as core_router
+from app.routers import users as users_router
 
 app = FastAPI(title="DSIO - Project Management Core API")
 app.include_router(core_router.router, prefix="/api/v1")
+app.include_router(users_router.router, prefix="/api/v1")
 
 
 @app.get("/health")

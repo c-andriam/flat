@@ -1,10 +1,11 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Enum, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Enum, String
 from sqlalchemy.orm import relationship
 
 from app.database import Base
+from app.models.base import UUIDMixin
 
 
 class UserRole(str, enum.Enum):
@@ -13,7 +14,7 @@ class UserRole(str, enum.Enum):
     LECTEUR = "lecteur"
 
 
-class User(Base):
+class User(UUIDMixin, Base):
     """
     Compte interne authentifié via SSO Microsoft (MSAL/Azure AD).
     Distinct de `Responsable` (models/project.py), qui est le nom
@@ -23,7 +24,6 @@ class User(Base):
 
     __tablename__ = "users"
 
-    id = Column(Integer, primary_key=True, index=True)
     azure_object_id = Column(String(36), unique=True, nullable=False, index=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
     display_name = Column(String(255), nullable=False)
