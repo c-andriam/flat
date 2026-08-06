@@ -55,6 +55,9 @@ app = FastAPI(
         "<token>` émis par le service `auth-api`."
     ),
     version="1.0.0",
+    docs_url="/api/v1/docs",
+    redoc_url="/api/v1/redoc",
+    openapi_url="/api/v1/openapi.json",
     contact={"name": "DSI - Trimeta Group"},
     openapi_tags=tags_metadata,
     swagger_ui_parameters={"defaultModelsExpandDepth": -1},
