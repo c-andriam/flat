@@ -1,7 +1,7 @@
 import os
 import sys
 from logging.config import fileConfig
-
+from urllib.parse import quote_plus
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
@@ -21,11 +21,11 @@ target_metadata = Base.metadata
 
 def get_database_url() -> str:
     user = os.environ["POSTGRES_USER"]
-    password = os.environ["POSTGRES_PASSWORD"]
+    password = quote_plus(os.environ["POSTGRES_PASSWORD"])   # <- quote_plus() ajouté
     db = os.environ["POSTGRES_DB"]
     host = os.getenv("POSTGRES_HOST", "postgres")
     port = os.getenv("POSTGRES_PORT", "5432")
-    return f"postgresql://{user}:{password}@{host}:{port}/{db}"
+    return f"postgresql://{user}:{password}@{host}:{port}/{db}?sslmode=require"  # <- ?sslmode=require ajouté
 
 
 def run_migrations_offline() -> None:
