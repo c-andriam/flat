@@ -31,23 +31,31 @@ class ResponsableOut(ResponsableBase):
 class ActionBase(BaseModel):
     description: str
     progress: float = 0.0
+    spi: float | None = None
+    otd: float | None = None
     deadline: date | None = None
-    priority: str | None = None
-    completion_date: date | None = None
+    date_realisation: date | None = None
+    priorite: str | None = None
+    resp_suivi: str | None = None
+    commentaire: str | None = None
 
 
 class ActionCreate(ActionBase):
     project_id: uuid.UUID
-    responsable_names: list[str] = []  # noms bruts extraits d'Excel
+    responsable_names: list[str] = []  # numero est généré automatiquement par le backend
 
 
 class ActionUpdate(BaseModel):
     description: str | None = None
     progress: float | None = None
+    spi: float | None = None
+    otd: float | None = None
     deadline: date | None = None
+    date_realisation: date | None = None
+    priorite: str | None = None
+    resp_suivi: str | None = None
+    commentaire: str | None = None
     status: str | None = None
-    priority: str | None = None
-    completion_date: date | None = None
 
 
 class ActionOut(ActionBase):
@@ -68,8 +76,6 @@ class ProjectBase(BaseModel):
     code: str
     name: str
     source_file_path: str
-    spi: float | None = None
-    otd: float | None = None
 
 
 class ProjectCreate(ProjectBase):
@@ -80,8 +86,6 @@ class ProjectUpdate(BaseModel):
     name: str | None = None
     source_file_path: str | None = None
     is_active: bool | None = None
-    spi: float | None = None
-    otd: float | None = None
 
 
 class ProjectOut(ProjectBase):

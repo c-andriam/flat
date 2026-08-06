@@ -22,7 +22,6 @@ from app.models.base import UUIDMixin
 
 # ---------------------------------------------------------------------------
 # Table d'association Action <-> Responsable (many-to-many)
-# Une action peut avoir plusieurs responsables (ex: "Meylis, Xavier" dans Excel)
 # ---------------------------------------------------------------------------
 action_responsables = Table(
     "action_responsables",
@@ -33,15 +32,7 @@ action_responsables = Table(
 
 
 class Responsable(UUIDMixin, Base):
-    """
-    Personne responsable d'actions, extraite de la colonne "Resp. réalisation"
-    des fichiers Excel.
-
-    display_name : nom brut tel qu'il apparaît dans Excel (ex: "Meylis").
-    email        : renseigné manuellement via l'interface de mapping.
-    is_mapped    : False tant qu'aucun email n'est associé -> déclenche
-                   l'alerte "Nouveau responsable détecté" côté worker d'ingestion.
-    """
+    """Personne responsable d'actions (colonne D - Resp. réalisation)."""
 
     __tablename__ = "responsables"
 
@@ -60,21 +51,14 @@ class Responsable(UUIDMixin, Base):
 
 
 class Project(UUIDMixin, Base):
-    """
-    Projet source, correspondant à un fichier Excel dans
-    SharePoint (ex: 07_Projets_DSIO/Projet encours/P01 - Nom/P01_xxx.xlsx).
-    """
+    """Projet (colonne A : [code] - [nom], ex: P01 - Cantine)."""
 
     __tablename__ = "projects"
 
     code = Column(String(50), unique=True, nullable=False, index=True)  # ex: "P01"
     name = Column(String(255), nullable=False)
-    source_file_path = Column(String(1024), nullable=False)  # chemin SharePoint du fichier Excel
+    source_file_path = Column(String(1024), nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
-    
-    # Nouveaux indicateurs de performance
-    spi = Column(Float, nullable=True)  # Schedule Performance Index
-    otd = Column(Float, nullable=True)  # On-Time Delivery
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_synced_at = Column(DateTime, nullable=True)
@@ -94,32 +78,33 @@ class ActionStatus(str, enum.Enum):
 
 class Action(UUIDMixin, Base):
     """
-    Ligne d'action extraite du tableau Excel d'un projet.
-    Le numéro est généré de manière séquentielle (ex: P01-01).
+    Ligne d'action (colonnes B à M).
+    numero (B) est généré automatiquement au format "P01-01".
     """
 
     __tablename__ = "actions"
 
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
 
-    numero = Column(String(50), nullable=False)  # ex: "P01-01" généré automatiquement
-    description = Column(Text, nullable=False)
-    progress = Column(Float, default=0.0, nullable=False)  # 0.0 -> 100.0
-    deadline = Column(Date, nullable=True)
-    status = Column(Enum(ActionStatus), default=ActionStatus.A_FAIRE, nullable=False)
-    
-    # Nouveaux champs de suivi
-    priority = Column(String(50), nullable=True)
-    completion_date = Column(Date, nullable=True)
+    numero = Column(String(50), nullable=False)              # B - généré auto : "P01-01"
+    description = Column(Text, nullable=False)                # C
+    progress = Column(Float, default=0.0, nullable=False)     # F - 0.0 -> 100.0
+    spi = Column(Float, nullable=True)                        # G - Schedule Performance Index
+    otd = Column(Float, nullable=True)                        # H - On-Time Delivery
+    deadline = Column(Date, nullable=True)                    # I
+    date_realisation = Column(Date, nullable=True)            # J
+    priorite = Column(String(50), nullable=True)              # K - optionnel
+    resp_suivi = Column(String(255), nullable=True)           # L - Responsable du suivi
+    commentaire = Column(Text, nullable=True)                 # M - optionnel
+    status = Column(Enum(ActionStatus), default=ActionStatus.A_FAIRE, nullable=False)  # E
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     project = relationship("Project", back_populates="actions")
-    responsables = relationship("Responsable", secondary=action_responsables, back_populates="actions")
+    responsables = relationship("Responsable", secondary=action_responsables, back_populates="actions")  # D
 
     def is_overdue(self, today: date | None = None) -> bool:
-        """Deadline <= aujourd'hui ET progress < 100 -> éligible à une relance."""
         today = today or date.today()
         return self.deadline is not None and self.deadline <= today and self.progress < 100.0
 
@@ -134,8 +119,6 @@ class SyncStatus(str, enum.Enum):
 
 
 class SyncLog(UUIDMixin, Base):
-    """Historique des synchronisations SharePoint -> PostgreSQL (worker d'ingestion)."""
-
     __tablename__ = "sync_logs"
 
     started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -149,14 +132,12 @@ class SyncLog(UUIDMixin, Base):
 
 
 class RelanceLog(UUIDMixin, Base):
-    """Historique des e-mails de relance envoyés via Outlook (moteur d'alertes)."""
-
     __tablename__ = "relance_logs"
 
     responsable_id = Column(UUID(as_uuid=True), ForeignKey("responsables.id", ondelete="CASCADE"), nullable=False, index=True)
     sent_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    action_ids = Column(Text, nullable=False)  # liste d'IDs d'actions concernées, sérialisée en JSON
-    email_status = Column(String(50), default="sent", nullable=False)  # sent / failed
+    action_ids = Column(Text, nullable=False)
+    email_status = Column(String(50), default="sent", nullable=False)
 
     responsable = relationship("Responsable", back_populates="relances")
 

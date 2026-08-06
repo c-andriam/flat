@@ -216,13 +216,11 @@ def create_action(payload: ActionCreate, db: Session = Depends(get_db)):
         if numero_str and "-" in numero_str:
             try:
                 num_part = int(numero_str.split("-")[-1])
-                if num_part > max_num:
-                    max_num = num_part
+                max_num = max(max_num, num_part)
             except ValueError:
                 continue
 
-    nouveau_num = max_num + 1
-    generated_numero = f"{project.code}-{nouveau_num:02d}"
+    generated_numero = f"{project.code}-{max_num + 1:02d}"
 
     data = payload.model_dump(exclude={"responsable_names"})
     action = Action(**data, numero=generated_numero)
@@ -230,7 +228,6 @@ def create_action(payload: ActionCreate, db: Session = Depends(get_db)):
     for name in payload.responsable_names:
         responsable = db.query(Responsable).filter(Responsable.display_name == name).first()
         if not responsable:
-            # nouveau nom détecté dans Excel -> créé non-mappé
             responsable = Responsable(display_name=name, is_mapped=False)
             db.add(responsable)
         action.responsables.append(responsable)
@@ -275,9 +272,8 @@ def update_action(action_id: uuid.UUID, payload: ActionUpdate, db: Session = Dep
 
     if "progress" in update_data and update_data["progress"] >= 100.0:
         action.status = ActionStatus.TERMINE
-        # Auto-complétion de la date de finalisation si non fournie explicitement
-        if action.completion_date is None:
-            action.completion_date = date.today()
+        if action.date_realisation is None:
+            action.date_realisation = date.today()
 
     db.commit()
     db.refresh(action)
