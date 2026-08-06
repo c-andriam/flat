@@ -29,11 +29,10 @@ class ResponsableOut(ResponsableBase):
 # --- Action ---
 
 class ActionBase(BaseModel):
+    numero: str
     description: str
     progress: float = 0.0
     deadline: date | None = None
-    priority: str | None = None
-    completion_date: date | None = None
 
 
 class ActionCreate(ActionBase):
@@ -46,15 +45,12 @@ class ActionUpdate(BaseModel):
     progress: float | None = None
     deadline: date | None = None
     status: str | None = None
-    priority: str | None = None
-    completion_date: date | None = None
 
 
 class ActionOut(ActionBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    numero: str
     project_id: uuid.UUID
     status: str
     responsables: list[ResponsableOut] = []
@@ -68,8 +64,6 @@ class ProjectBase(BaseModel):
     code: str
     name: str
     source_file_path: str
-    spi: float | None = None
-    otd: float | None = None
 
 
 class ProjectCreate(ProjectBase):
@@ -80,8 +74,6 @@ class ProjectUpdate(BaseModel):
     name: str | None = None
     source_file_path: str | None = None
     is_active: bool | None = None
-    spi: float | None = None
-    otd: float | None = None
 
 
 class ProjectOut(ProjectBase):

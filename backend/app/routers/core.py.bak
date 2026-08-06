@@ -3,7 +3,7 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import text
+
 from app.database import get_db
 from app.models.project import (
     Action,
@@ -195,8 +195,7 @@ def get_action(action_id: uuid.UUID, db: Session = Depends(get_db)):
     tags=["actions"],
     summary="Créer une action",
     description=(
-        "Crée une action rattachée à un projet existant. Le numéro d'action "
-        "est généré automatiquement (ex: P01-01). Les responsables "
+        "Crée une action rattachée à un projet existant. Les responsables "
         "listés dans `responsable_names` sont associés par nom affiché ; tout "
         "nom inconnu est créé automatiquement comme `Responsable` non mappé "
         "(`is_mapped=False`), à associer ensuite à un email."
@@ -209,28 +208,13 @@ def create_action(payload: ActionCreate, db: Session = Depends(get_db)):
     if not project:
         raise HTTPException(status_code=404, detail="Projet introuvable")
 
-    # Génération automatique du numéro d'action (ex: P01-01)
-    actions_existantes = db.query(Action.numero).filter(Action.project_id == project.id).all()
-    max_num = 0
-    for (numero_str,) in actions_existantes:
-        if numero_str and "-" in numero_str:
-            try:
-                num_part = int(numero_str.split("-")[-1])
-                if num_part > max_num:
-                    max_num = num_part
-            except ValueError:
-                continue
-
-    nouveau_num = max_num + 1
-    generated_numero = f"{project.code}-{nouveau_num:02d}"
-
     data = payload.model_dump(exclude={"responsable_names"})
-    action = Action(**data, numero=generated_numero)
+    action = Action(**data)
 
     for name in payload.responsable_names:
         responsable = db.query(Responsable).filter(Responsable.display_name == name).first()
         if not responsable:
-            # nouveau nom détecté dans Excel -> créé non-mappé
+            # nouveau nom détecté dans Excel -> créé non-mappé, à associer à un email ensuite
             responsable = Responsable(display_name=name, is_mapped=False)
             db.add(responsable)
         action.responsables.append(responsable)
@@ -249,7 +233,7 @@ def create_action(payload: ActionCreate, db: Session = Depends(get_db)):
     description=(
         "Permet de cocher/valider une action depuis le logiciel (ex: "
         "`progress`). Passer `progress` à 100 ou plus bascule automatiquement "
-        "le statut sur `TERMINE` et assigne une date de complétion."
+        "le statut sur `TERMINE`."
     ),
     response_description="L'action mise à jour.",
     responses={
@@ -275,9 +259,6 @@ def update_action(action_id: uuid.UUID, payload: ActionUpdate, db: Session = Dep
 
     if "progress" in update_data and update_data["progress"] >= 100.0:
         action.status = ActionStatus.TERMINE
-        # Auto-complétion de la date de finalisation si non fournie explicitement
-        if action.completion_date is None:
-            action.completion_date = date.today()
 
     db.commit()
     db.refresh(action)
@@ -452,26 +433,3 @@ def list_relance_logs(db: Session = Depends(get_db)):
         }
         for log in logs
     ]
-
-# ---------------------------------------------------------------------------
-# Monitoring — Health check API v1
-# ---------------------------------------------------------------------------
-
-@router.get(
-    "/health",
-    tags=["monitoring"],
-    summary="Vérifier l'état du service core (API v1)",
-    description="Endpoint de health check accessible sur /api/v1/health.",
-)
-def health_check_v1(db: Session = Depends(get_db)):
-    try:
-        db.execute(text("SELECT 1"))
-        db_status = "connected"
-    except Exception as e:
-        db_status = f"unreachable ({str(e)})"
-
-    return {
-        "status": "ok",
-        "service": "core-api",
-        "database": db_status
-    }

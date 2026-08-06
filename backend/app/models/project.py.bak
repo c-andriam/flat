@@ -71,10 +71,6 @@ class Project(UUIDMixin, Base):
     name = Column(String(255), nullable=False)
     source_file_path = Column(String(1024), nullable=False)  # chemin SharePoint du fichier Excel
     is_active = Column(Boolean, default=True, nullable=False)
-    
-    # Nouveaux indicateurs de performance
-    spi = Column(Float, nullable=True)  # Schedule Performance Index
-    otd = Column(Float, nullable=True)  # On-Time Delivery
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_synced_at = Column(DateTime, nullable=True)
@@ -94,23 +90,19 @@ class ActionStatus(str, enum.Enum):
 
 class Action(UUIDMixin, Base):
     """
-    Ligne d'action extraite du tableau Excel d'un projet.
-    Le numéro est généré de manière séquentielle (ex: P01-01).
+    Ligne d'action extraite du tableau Excel d'un projet
+    (colonnes: N° d'actions, Actions, Resp. réalisation, %Progress, Deadline).
     """
 
     __tablename__ = "actions"
 
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
 
-    numero = Column(String(50), nullable=False)  # ex: "P01-01" généré automatiquement
+    numero = Column(String(50), nullable=False)  # "N° d'actions" tel quel dans Excel
     description = Column(Text, nullable=False)
     progress = Column(Float, default=0.0, nullable=False)  # 0.0 -> 100.0
     deadline = Column(Date, nullable=True)
     status = Column(Enum(ActionStatus), default=ActionStatus.A_FAIRE, nullable=False)
-    
-    # Nouveaux champs de suivi
-    priority = Column(String(50), nullable=True)
-    completion_date = Column(Date, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
