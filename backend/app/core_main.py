@@ -1,17 +1,11 @@
 from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from app.database import Base, engine, get_db
-from app import models  # noqa: F401  (nécessaire pour enregistrer tous les modèles sur Base.metadata)
+from app.database import get_db
+from app.routers import core as core_router
 
 app = FastAPI(title="DSIO - Project Management Core API")
-
-
-@app.on_event("startup")
-def on_startup():
-    # TODO: remplacer par des migrations Alembic avant la mise en production.
-    # Suffisant pour le POC : crée les tables si elles n'existent pas encore.
-    Base.metadata.create_all(bind=engine)
+app.include_router(core_router.router, prefix="/api/v1")
 
 
 @app.get("/health")

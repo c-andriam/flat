@@ -13,7 +13,7 @@ NC			= \033[0m
 # ==============================================================================
 # Règles principales
 # ==============================================================================
-.PHONY: all build up down start stop status logs clean fclean re
+.PHONY: all build up down start stop status logs clean fclean re migrate makemigrations
 
 # Règle par défaut
 all: up
@@ -52,6 +52,20 @@ status:
 logs:
 	@echo "$(YELLOW) Affichage des logs (Ctrl+C pour quitter)...$(NC)"
 	$(COMPOSE) logs -f
+
+# ==============================================================================
+# Migrations Alembic
+# ==============================================================================
+
+# Génère une nouvelle migration à partir des modèles SQLAlchemy (m="message")
+makemigrations:
+	@echo "$(YELLOW) Génération de la migration Alembic...$(NC)"
+	$(PODMAN) exec -it dsio-core-api alembic revision --autogenerate -m "$(m)"
+
+# Applique les migrations en attente
+migrate:
+	@echo "$(GREEN) Application des migrations Alembic...$(NC)"
+	$(PODMAN) exec -it dsio-core-api alembic upgrade head
 
 # ==============================================================================
 # Règles de nettoyage
