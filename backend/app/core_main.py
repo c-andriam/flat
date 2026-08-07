@@ -129,15 +129,5 @@ def health_check(db: Session = Depends(get_db)):
     return perform_health_check(db)
 
 
-@app.get(
-    "/api/v1/health",
-    tags=["monitoring"],
-    summary="Vérifier l'état du service core (API v1)",
-    description=(
-        "Endpoint de health check accessible sous le préfixe /api/v1."
-    ),
-    response_description="Statut du service et de la connexion à la base de données.",
-)
-def health_check_v1(db: Session = Depends(get_db)):
-    """Vérifie que l'API v1 tourne et que PostgreSQL répond aux requêtes."""
-    return perform_health_check(db)
+# NOTE : /api/v1/health est défini une seule fois, dans routers/core.py
+# (monté avec le préfixe /api/v1). Une définition ici ferait doublon.
