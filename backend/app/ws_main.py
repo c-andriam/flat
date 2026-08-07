@@ -37,7 +37,6 @@ app = FastAPI(
     openapi_url="/api/v1/realtime/openapi.json",
 )
 
-
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 
@@ -103,4 +102,3 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
     finally:
         await pubsub.unsubscribe("dsio-events")
         await r.aclose()
-

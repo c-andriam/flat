@@ -41,6 +41,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: dsio-auth-api
+    dns:
+      - 10.89.0.1
+      - 1.1.1.1
+      - 8.8.8.8
     restart: always
     command: uvicorn app.auth_main:app --host 0.0.0.0 --port 8001
     env_file:
@@ -56,6 +60,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: dsio-core-api
+    dns:
+      - 10.89.0.1
+      - 1.1.1.1
+      - 8.8.8.8
     restart: always
     command: uvicorn app.core_main:app --host 0.0.0.0 --port 8000
     env_file:
@@ -74,6 +82,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: dsio-realtime-hub
+    dns:
+      - 10.89.0.1
+      - 1.1.1.1
+      - 8.8.8.8
     restart: always
     command: uvicorn app.ws_main:app --host 0.0.0.0 --port 8002
     env_file:
@@ -94,6 +106,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: dsio-worker-ingestion
+    dns:
+      - 10.89.0.1
+      - 1.1.1.1
+      - 8.8.8.8
     restart: always
     command: celery -A app.workers.celery_app worker -Q ingestion_queue --loglevel=info
     env_file:
@@ -112,6 +128,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: dsio-worker-writeback
+    dns:
+      - 10.89.0.1
+      - 1.1.1.1
+      - 8.8.8.8
     restart: always
     command: celery -A app.workers.celery_app worker -Q writeback_queue --loglevel=info
     env_file:
@@ -130,6 +150,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: dsio-scheduler-notifications
+    dns:
+      - 10.89.0.1
+      - 1.1.1.1
+      - 8.8.8.8
     restart: always
     command: celery -A app.workers.celery_app beat --loglevel=info
     env_file:

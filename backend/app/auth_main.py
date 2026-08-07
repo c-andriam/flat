@@ -57,4 +57,3 @@ def health_check():
 )
 def health_check_public():
     return {"status": "ok", "service": "auth-api"}
-

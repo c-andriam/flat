@@ -31,6 +31,7 @@ action_responsables = Table(
     Column("responsable_id", UUID(as_uuid=True), ForeignKey("responsables.id", ondelete="CASCADE"), primary_key=True),
 )
 
+
 class Responsable(UUIDMixin, Base):
     """Personne responsable d'actions (colonne D - Resp. réalisation)."""
 
@@ -73,7 +74,6 @@ class ActionStatus(str, enum.Enum):
     EN_COURS = "en_cours"
     EN_RETARD = "en_retard"
     TERMINE = "termine"
-
 
 
 class Action(UUIDMixin, Base):
