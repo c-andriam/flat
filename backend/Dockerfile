@@ -8,11 +8,13 @@ RUN apt-get update -o Acquire::ForceIPv4=true \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
+
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN useradd -m -r appuser
+RUN useradd -m -r appuser && chown -R appuser:appuser /app
+
 USER appuser
 
 EXPOSE 8000 8001 8002
