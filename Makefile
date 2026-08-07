@@ -60,12 +60,12 @@ logs:
 # Génère une nouvelle migration à partir des modèles SQLAlchemy (m="message")
 makemigrations:
 	@echo "$(YELLOW) Génération de la migration Alembic...$(NC)"
-	$(PODMAN) exec -it dsio-core-api alembic revision --autogenerate -m "$(m)"
+	$(PODMAN) exec dsio-core-api alembic revision --autogenerate -m "$(m)"
 
 # Applique les migrations en attente
 migrate:
 	@echo "$(GREEN) Application des migrations Alembic...$(NC)"
-	$(PODMAN) exec -it dsio-core-api alembic upgrade head
+	$(PODMAN) exec dsio-core-api alembic upgrade head
 
 # ==============================================================================
 # Règles de nettoyage

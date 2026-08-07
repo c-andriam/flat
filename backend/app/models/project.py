@@ -1,5 +1,5 @@
 import enum
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from sqlalchemy import (
     Boolean,
@@ -40,8 +40,8 @@ class Responsable(UUIDMixin, Base):
     email = Column(String(255), nullable=True)
     is_mapped = Column(Boolean, default=False, nullable=False)
 
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
     actions = relationship("Action", secondary=action_responsables, back_populates="responsables")
     relances = relationship("RelanceLog", back_populates="responsable", cascade="all, delete-orphan")
@@ -59,7 +59,7 @@ class Project(UUIDMixin, Base):
     is_active = Column(Boolean, default=True, nullable=False)
     has_phases = Column(Boolean, default=False, nullable=False)  # active le format P01-01-01
 
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     last_synced_at = Column(DateTime, nullable=True)
 
     actions = relationship("Action", back_populates="project", cascade="all, delete-orphan")
@@ -94,8 +94,8 @@ class Action(UUIDMixin, Base):
     commentaire = Column(Text, nullable=True)                  # L
     status = Column(Enum(ActionStatus), default=ActionStatus.A_FAIRE, nullable=False)  # champ interne, pas dans le tableau Excel
 
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
     project = relationship("Project", back_populates="actions")
     responsables = relationship("Responsable", secondary=action_responsables, back_populates="actions")  # D
@@ -116,7 +116,7 @@ class SyncStatus(str, enum.Enum):
 class SyncLog(UUIDMixin, Base):
     __tablename__ = "sync_logs"
 
-    started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     finished_at = Column(DateTime, nullable=True)
     status = Column(Enum(SyncStatus), default=SyncStatus.RUNNING, nullable=False)
     files_processed = Column(Integer, default=0, nullable=False)
@@ -130,7 +130,7 @@ class RelanceLog(UUIDMixin, Base):
     __tablename__ = "relance_logs"
 
     responsable_id = Column(UUID(as_uuid=True), ForeignKey("responsables.id", ondelete="CASCADE"), nullable=False, index=True)
-    sent_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    sent_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     action_ids = Column(Text, nullable=False)
     email_status = Column(String(50), default="sent", nullable=False)
 

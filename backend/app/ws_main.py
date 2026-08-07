@@ -1,7 +1,12 @@
+import logging
 import os
 
 import redis.asyncio as redis
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+
+from app.services.security import decode_access_token
+
+logger = logging.getLogger("realtime-hub")
 
 tags_metadata = [
     {
@@ -31,6 +36,12 @@ app = FastAPI(
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 
+# Pool Redis partagé (évite d'instancier un client par WebSocket)
+redis_pool = redis.ConnectionPool.from_url(
+    f"redis://{REDIS_HOST}:{REDIS_PORT}/0",
+    decode_responses=True,
+)
+
 
 @app.get(
     "/health",
@@ -44,24 +55,30 @@ def health_check():
 
 
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
     """
     Canal WebSocket temps réel.
 
-    Non documenté dans Swagger (limitation OpenAPI). À la connexion, le
-    serveur s'abonne au canal Redis Pub/Sub `dsio-events` et relaie chaque
-    message reçu vers le client tel quel (texte brut).
-
-    TODO: authentifier le client (token JWT) avant `accept()`, et définir un
-    format de message structuré (JSON) pour permettre le routage côté client.
+    Non documenté dans Swagger (limitation OpenAPI). Le client doit passer
+    son JWT via le query parameter `token` (ex: ws://host/ws?token=eyJ...).
+    À la connexion, le serveur s'abonne au canal Redis Pub/Sub `dsio-events`
+    et relaie chaque message reçu vers le client tel quel (texte brut).
     """
+    # --- Authentification JWT obligatoire ---
+    if not token:
+        await websocket.close(code=1008, reason="Token manquant")
+        return
+    try:
+        decode_access_token(token)
+    except Exception:
+        await websocket.close(code=1008, reason="Token invalide ou expiré")
+        return
+
     await websocket.accept()
-    r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+    r = redis.Redis(connection_pool=redis_pool)
     pubsub = r.pubsub()
     await pubsub.subscribe("dsio-events")
     try:
-        # TODO: relayer les messages Redis Pub/Sub vers le client WebSocket
-        # et gérer l'authentification (token JWT) avant l'accept().
         async for message in pubsub.listen():
             if message["type"] == "message":
                 await websocket.send_text(message["data"])
@@ -69,4 +86,4 @@ async def websocket_endpoint(websocket: WebSocket):
         pass
     finally:
         await pubsub.unsubscribe("dsio-events")
-        await r.close()
+        await r.aclose()

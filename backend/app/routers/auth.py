@@ -91,8 +91,8 @@ def callback(code: str, db: Session = Depends(get_db)):
         user.email = email
         user.display_name = display_name
 
-    from datetime import datetime
-    user.last_login_at = datetime.utcnow()
+    from datetime import datetime, timezone
+    user.last_login_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(user)
 

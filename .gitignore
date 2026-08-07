@@ -1,4 +1,26 @@
+# --- Secrets ---
 .env
+
+# --- Python ---
 __pycache__/
 *.pyc
-compose.yml.bak
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# --- Node / Frontend ---
+node_modules/
+dist/
+build/
+
+# --- Backups ---
+*.bak
+
+# --- IDE / OS ---
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

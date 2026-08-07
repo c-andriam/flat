@@ -478,8 +478,8 @@ def health_check_v1(db: Session = Depends(get_db)):
     try:
         db.execute(text("SELECT 1"))
         db_status = "connected"
-    except Exception as e:
-        db_status = f"unreachable ({str(e)})"
+    except Exception:
+        db_status = "unreachable"
 
     return {
         "status": "ok",

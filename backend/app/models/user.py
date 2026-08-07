@@ -1,5 +1,5 @@
 import enum
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, Column, DateTime, Enum, String
 from sqlalchemy.orm import relationship
@@ -30,7 +30,7 @@ class User(UUIDMixin, Base):
     role = Column(Enum(UserRole), default=UserRole.LECTEUR, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
 
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     last_login_at = Column(DateTime, nullable=True)
 
     def __repr__(self) -> str:
