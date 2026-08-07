@@ -209,21 +209,36 @@ def create_action(payload: ActionCreate, db: Session = Depends(get_db)):
     if not project:
         raise HTTPException(status_code=404, detail="Projet introuvable")
 
-    # Génération automatique du numéro d'action (ex: P01-01)
-    actions_existantes = db.query(Action.numero).filter(Action.project_id == project.id).all()
+    phase = payload.phase if project.has_phases else None
+
+    if project.has_phases and not phase:
+        raise HTTPException(
+            status_code=422,
+            detail="Ce projet utilise les phases (has_phases=True) : le champ 'phase' est obligatoire.",
+        )
+
+    # Compte les actions existantes dans le même scope (projet, ou projet+phase si applicable)
+    query = db.query(Action.numero).filter(Action.project_id == project.id)
+    if phase is not None:
+        query = query.filter(Action.phase == phase)
+    else:
+        query = query.filter(Action.phase.is_(None))
+
     max_num = 0
-    for (numero_str,) in actions_existantes:
+    for (numero_str,) in query.all():
         if numero_str and "-" in numero_str:
             try:
-                num_part = int(numero_str.split("-")[-1])
-                max_num = max(max_num, num_part)
+                max_num = max(max_num, int(numero_str.split("-")[-1]))
             except ValueError:
                 continue
 
-    generated_numero = f"{project.code}-{max_num + 1:02d}"
+    if phase is not None:
+        generated_numero = f"{project.code}-{phase}-{max_num + 1:02d}"
+    else:
+        generated_numero = f"{project.code}-{max_num + 1:02d}"
 
-    data = payload.model_dump(exclude={"responsable_names"})
-    action = Action(**data, numero=generated_numero)
+    data = payload.model_dump(exclude={"responsable_names", "phase"})
+    action = Action(**data, numero=generated_numero, phase=phase)
 
     for name in payload.responsable_names:
         responsable = db.query(Responsable).filter(Responsable.display_name == name).first()

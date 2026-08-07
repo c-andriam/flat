@@ -30,32 +30,34 @@ class ResponsableOut(ResponsableBase):
 
 class ActionBase(BaseModel):
     description: str
+    resp_suivi: str | None = None
     progress: float = 0.0
     spi: float | None = None
     otd: float | None = None
     deadline: date | None = None
     date_realisation: date | None = None
-    priorite: str | None = None
-    resp_suivi: str | None = None
+    charges_hj: float | None = None
     commentaire: str | None = None
 
 
 class ActionCreate(ActionBase):
     project_id: uuid.UUID
-    responsable_names: list[str] = []  # numero est généré automatiquement par le backend
+    responsable_names: list[str] = []
+    phase: str | None = None  # requis seulement si le projet a has_phases=True
 
 
 class ActionUpdate(BaseModel):
     description: str | None = None
+    resp_suivi: str | None = None
     progress: float | None = None
     spi: float | None = None
     otd: float | None = None
     deadline: date | None = None
     date_realisation: date | None = None
-    priorite: str | None = None
-    resp_suivi: str | None = None
+    charges_hj: float | None = None
     commentaire: str | None = None
     status: str | None = None
+    phase: str | None = None
 
 
 class ActionOut(ActionBase):
@@ -63,6 +65,7 @@ class ActionOut(ActionBase):
 
     id: uuid.UUID
     numero: str
+    phase: str | None = None
     project_id: uuid.UUID
     status: str
     responsables: list[ResponsableOut] = []
@@ -76,6 +79,7 @@ class ProjectBase(BaseModel):
     code: str
     name: str
     source_file_path: str
+    has_phases: bool = False
 
 
 class ProjectCreate(ProjectBase):
@@ -86,6 +90,7 @@ class ProjectUpdate(BaseModel):
     name: str | None = None
     source_file_path: str | None = None
     is_active: bool | None = None
+    has_phases: bool | None = None
 
 
 class ProjectOut(ProjectBase):

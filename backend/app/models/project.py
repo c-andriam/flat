@@ -51,14 +51,13 @@ class Responsable(UUIDMixin, Base):
 
 
 class Project(UUIDMixin, Base):
-    """Projet (colonne A : [code] - [nom], ex: P01 - Cantine)."""
-
     __tablename__ = "projects"
 
-    code = Column(String(50), unique=True, nullable=False, index=True)  # ex: "P01"
+    code = Column(String(50), unique=True, nullable=False, index=True)
     name = Column(String(255), nullable=False)
     source_file_path = Column(String(1024), nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
+    has_phases = Column(Boolean, default=False, nullable=False)  # active le format P01-01-01
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_synced_at = Column(DateTime, nullable=True)
@@ -77,26 +76,23 @@ class ActionStatus(str, enum.Enum):
 
 
 class Action(UUIDMixin, Base):
-    """
-    Ligne d'action (colonnes B à M).
-    numero (B) est généré automatiquement au format "P01-01".
-    """
-
     __tablename__ = "actions"
 
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
 
-    numero = Column(String(50), nullable=False)              # B - généré auto : "P01-01"
-    description = Column(Text, nullable=False)                # C
-    progress = Column(Float, default=0.0, nullable=False)     # F - 0.0 -> 100.0
-    spi = Column(Float, nullable=True)                        # G - Schedule Performance Index
-    otd = Column(Float, nullable=True)                        # H - On-Time Delivery
-    deadline = Column(Date, nullable=True)                    # I
-    date_realisation = Column(Date, nullable=True)            # J
-    priorite = Column(String(50), nullable=True)              # K - optionnel
-    resp_suivi = Column(String(255), nullable=True)           # L - Responsable du suivi
-    commentaire = Column(Text, nullable=True)                 # M - optionnel
-    status = Column(Enum(ActionStatus), default=ActionStatus.A_FAIRE, nullable=False)  # E
+    numero = Column(String(50), nullable=False)               # B - "P01-01" ou "P01-01-01" si phase
+    phase = Column(String(10), nullable=True)                  # phase du projet (ex: "01"), si has_phases
+    description = Column(Text, nullable=False)                 # C
+    # D "Resp. réalisation" -> via la relation responsables (many-to-many)
+    resp_suivi = Column(String(255), nullable=True)            # E
+    progress = Column(Float, default=0.0, nullable=False)      # F
+    spi = Column(Float, nullable=True)                         # G
+    otd = Column(Float, nullable=True)                         # H
+    deadline = Column(Date, nullable=True)                     # I
+    date_realisation = Column(Date, nullable=True)             # J
+    charges_hj = Column(Float, nullable=True)                  # K - Charges (h/j)
+    commentaire = Column(Text, nullable=True)                  # L
+    status = Column(Enum(ActionStatus), default=ActionStatus.A_FAIRE, nullable=False)  # champ interne, pas dans le tableau Excel
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -110,7 +106,6 @@ class Action(UUIDMixin, Base):
 
     def __repr__(self) -> str:
         return f"<Action id={self.id} numero={self.numero!r} progress={self.progress}>"
-
 
 class SyncStatus(str, enum.Enum):
     RUNNING = "running"
