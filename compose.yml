@@ -1,40 +1,19 @@
-
-
 networks:
   dsio-internal-net:
     driver: bridge
     name: dsio-internal-net
 
 volumes:
-  postgres_data:
-    name: dsio_postgres_data
   redis_data:
     name: dsio_redis_data
 
 services:
 
   # =========================================================================
-  # 🗄️ 4. LA COUCHE INFRASTRUCTURE (Base de données & Message Broker)
+  # 🗄️ 4. LA COUCHE INFRASTRUCTURE (Message Broker)
+  # NOTE : PostgreSQL est hébergé sur Supabase (voir POSTGRES_HOST dans .env),
+  # pas de conteneur Postgres local nécessaire.
   # =========================================================================
-
-  # Service 9 : Base de données PostgreSQL (Source de Vérité)
-  postgres:
-    image: postgres:16-alpine
-    container_name: dsio-postgres
-    restart: always
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - dsio-internal-net
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
 
   # Service 10 : File de messages et Pub/Sub Redis
   redis:
@@ -70,9 +49,6 @@ services:
       - ./backend/alembic/versions:/app/alembic/versions:z
     networks:
       - dsio-internal-net
-    depends_on:
-      postgres:
-        condition: service_healthy
 
   # Service 3 : Core API (CRUD Projets, Actions & Audit Logs)
   core-api:
@@ -89,8 +65,6 @@ services:
     networks:
       - dsio-internal-net
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
 
@@ -129,8 +103,6 @@ services:
     networks:
       - dsio-internal-net
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
 
@@ -149,8 +121,6 @@ services:
     networks:
       - dsio-internal-net
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
 
@@ -169,8 +139,6 @@ services:
     networks:
       - dsio-internal-net
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
 
@@ -195,7 +163,8 @@ services:
     restart: always
     ports:
       - "8080:80"
-      - "8443:443"
+      # NOTE : 8443/HTTPS retiré - nginx.conf n'a pas de "listen 443"
+      # ni de certificat configuré. À réactiver une fois le TLS mis en place.
     volumes:
       - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro,Z
     networks:
