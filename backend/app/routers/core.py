@@ -4,6 +4,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from app.database import get_db
 from app.models.project import (
     Action,
@@ -188,6 +189,26 @@ def get_action(action_id: uuid.UUID, db: Session = Depends(get_db)):
     return action
 
 
+def _generate_numero(db, project, phase):
+    query = db.query(Action.numero).filter(Action.project_id == project.id)
+    if phase is not None:
+        query = query.filter(Action.phase == phase)
+    else:
+        query = query.filter(Action.phase.is_(None))
+
+    max_num = 0
+    for (numero_str,) in query.all():
+        if numero_str and "-" in numero_str:
+            try:
+                max_num = max(max_num, int(numero_str.split("-")[-1]))
+            except ValueError:
+                continue
+
+    if phase is not None:
+        return f"{project.code}-{phase}-{max_num + 1:02d}"
+    return f"{project.code}-{max_num + 1:02d}"
+
+
 @router.post(
     "/actions",
     response_model=ActionOut,
@@ -217,40 +238,39 @@ def create_action(payload: ActionCreate, db: Session = Depends(get_db)):
             detail="Ce projet utilise les phases (has_phases=True) : le champ 'phase' est obligatoire.",
         )
 
-    # Compte les actions existantes dans le même scope (projet, ou projet+phase si applicable)
-    query = db.query(Action.numero).filter(Action.project_id == project.id)
-    if phase is not None:
-        query = query.filter(Action.phase == phase)
-    else:
-        query = query.filter(Action.phase.is_(None))
-
-    max_num = 0
-    for (numero_str,) in query.all():
-        if numero_str and "-" in numero_str:
-            try:
-                max_num = max(max_num, int(numero_str.split("-")[-1]))
-            except ValueError:
-                continue
-
-    if phase is not None:
-        generated_numero = f"{project.code}-{phase}-{max_num + 1:02d}"
-    else:
-        generated_numero = f"{project.code}-{max_num + 1:02d}"
-
     data = payload.model_dump(exclude={"responsable_names", "phase"})
-    action = Action(**data, numero=generated_numero, phase=phase)
 
-    for name in payload.responsable_names:
-        responsable = db.query(Responsable).filter(Responsable.display_name == name).first()
-        if not responsable:
-            responsable = Responsable(display_name=name, is_mapped=False)
-            db.add(responsable)
-        action.responsables.append(responsable)
+    # Retry en cas de conflit sur numero (deux créations concurrentes ayant lu
+    # le même max_num avant de committer). La contrainte unique en base
+    # (project_id, numero) garantit qu'aucun doublon ne peut passer ; on se
+    # contente ici de régénérer un numero frais et de réessayer.
+    max_attempts = 5
+    for attempt in range(1, max_attempts + 1):
+        generated_numero = _generate_numero(db, project, phase)
+        action = Action(**data, numero=generated_numero, phase=phase)
 
-    db.add(action)
-    db.commit()
-    db.refresh(action)
-    return action
+        for name in payload.responsable_names:
+            responsable = db.query(Responsable).filter(Responsable.display_name == name).first()
+            if not responsable:
+                responsable = Responsable(display_name=name, is_mapped=False)
+                db.add(responsable)
+            action.responsables.append(responsable)
+
+        db.add(action)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            if attempt == max_attempts:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Impossible de générer un numéro d'action unique après plusieurs tentatives, réessaie.",
+                )
+            continue
+        else:
+            db.refresh(action)
+            return action
+
 
 
 @router.patch(

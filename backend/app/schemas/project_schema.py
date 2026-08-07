@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # --- Responsable ---
@@ -32,17 +32,22 @@ class ActionBase(BaseModel):
     description: str
     resp_suivi: str | None = None
     progress: float = 0.0
-    spi: float | None = None
-    otd: float | None = None
+    spi: float = 0.0
+    otd: float = 0.0
     deadline: date | None = None
-    date_realisation: date | None = None
+    date_realisation: date | None = None  # rempli seulement quand l'action est terminée
     charges_hj: float | None = None
     commentaire: str | None = None
 
 
 class ActionCreate(ActionBase):
+    # Contraintes strictes à la création : un suivi sans responsable ni
+    # échéance n'est pas exploitable. ActionOut reste nullable pour ne pas
+    # casser la lecture des actions existantes créées avant cette règle.
+    resp_suivi: str
+    deadline: date
     project_id: uuid.UUID
-    responsable_names: list[str] = []
+    responsable_names: list[str] = Field(..., min_length=1)
     phase: str | None = None  # requis seulement si le projet a has_phases=True
 
 

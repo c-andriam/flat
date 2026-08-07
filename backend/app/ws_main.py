@@ -31,7 +31,12 @@ app = FastAPI(
     contact={"name": "DSI - Trimeta Group"},
     openapi_tags=tags_metadata,
     swagger_ui_parameters={"defaultModelsExpandDepth": -1},
+    # Alignés sur le préfixe /api/v1/realtime que nginx route vers ce service.
+    docs_url="/api/v1/realtime/docs",
+    redoc_url="/api/v1/realtime/redoc",
+    openapi_url="/api/v1/realtime/openapi.json",
 )
+
 
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
@@ -47,10 +52,21 @@ redis_pool = redis.ConnectionPool.from_url(
     "/health",
     tags=["monitoring"],
     summary="Vérifier l'état du service temps réel",
-    description="Endpoint de health check utilisé par les sondes de supervision (uptime, load balancer).",
+    description="Endpoint de health check interne (ex: probe container-à-container).",
     response_description="Statut du service.",
 )
 def health_check():
+    return {"status": "ok", "service": "realtime-hub"}
+
+
+@app.get(
+    "/api/v1/realtime/health",
+    tags=["monitoring"],
+    summary="Vérifier l'état du service temps réel (accessible via le gateway)",
+    description="Identique à /health, mais joignable depuis l'extérieur via le gateway nginx.",
+    response_description="Statut du service.",
+)
+def health_check_public():
     return {"status": "ok", "service": "realtime-hub"}
 
 
@@ -87,3 +103,4 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
     finally:
         await pubsub.unsubscribe("dsio-events")
         await r.aclose()
+

@@ -13,6 +13,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -29,7 +30,6 @@ action_responsables = Table(
     Column("action_id", UUID(as_uuid=True), ForeignKey("actions.id", ondelete="CASCADE"), primary_key=True),
     Column("responsable_id", UUID(as_uuid=True), ForeignKey("responsables.id", ondelete="CASCADE"), primary_key=True),
 )
-
 
 class Responsable(UUIDMixin, Base):
     """Personne responsable d'actions (colonne D - Resp. réalisation)."""
@@ -75,8 +75,12 @@ class ActionStatus(str, enum.Enum):
     TERMINE = "termine"
 
 
+
 class Action(UUIDMixin, Base):
     __tablename__ = "actions"
+    __table_args__ = (
+        UniqueConstraint("project_id", "numero", name="uq_action_project_numero"),
+    )
 
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
 
@@ -86,8 +90,8 @@ class Action(UUIDMixin, Base):
     # D "Resp. réalisation" -> via la relation responsables (many-to-many)
     resp_suivi = Column(String(255), nullable=True)            # E
     progress = Column(Float, default=0.0, nullable=False)      # F
-    spi = Column(Float, nullable=True)                         # G
-    otd = Column(Float, nullable=True)                         # H
+    spi = Column(Float, default=0.0, nullable=False)          # G
+    otd = Column(Float, default=0.0, nullable=False)          # H
     deadline = Column(Date, nullable=True)                     # I
     date_realisation = Column(Date, nullable=True)             # J
     charges_hj = Column(Float, nullable=True)                  # K - Charges (h/j)

@@ -28,6 +28,11 @@ app = FastAPI(
     contact={"name": "DSI - Trimeta Group"},
     openapi_tags=tags_metadata,
     swagger_ui_parameters={"defaultModelsExpandDepth": -1},
+    # Alignés sur le préfixe /api/v1/auth que nginx route vers ce service
+    # (proxy_pass conserve l'URI complète telle quelle, cf. gateway/nginx.conf).
+    docs_url="/api/v1/auth/docs",
+    redoc_url="/api/v1/auth/redoc",
+    openapi_url="/api/v1/auth/openapi.json",
 )
 app.include_router(auth_router.router, prefix="/api/v1")
 
@@ -36,8 +41,20 @@ app.include_router(auth_router.router, prefix="/api/v1")
     "/health",
     tags=["monitoring"],
     summary="Vérifier l'état du service auth",
-    description="Endpoint de health check utilisé par les sondes de supervision (uptime, load balancer).",
+    description="Endpoint de health check interne (ex: probe container-à-container).",
     response_description="Statut du service.",
 )
 def health_check():
     return {"status": "ok", "service": "auth-api"}
+
+
+@app.get(
+    "/api/v1/auth/health",
+    tags=["monitoring"],
+    summary="Vérifier l'état du service auth (accessible via le gateway)",
+    description="Identique à /health, mais joignable depuis l'extérieur via le gateway nginx.",
+    response_description="Statut du service.",
+)
+def health_check_public():
+    return {"status": "ok", "service": "auth-api"}
+
