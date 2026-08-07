@@ -13,7 +13,7 @@ NC			= \033[0m
 # ==============================================================================
 # Règles principales
 # ==============================================================================
-.PHONY: all build up down start stop status logs clean fclean re migrate makemigrations
+.PHONY: all build up down start stop status logs clean fclean re migrate makemigrations test
 
 # Règle par défaut
 all: up
@@ -66,6 +66,18 @@ makemigrations:
 migrate:
 	@echo "$(GREEN) Application des migrations Alembic...$(NC)"
 	$(PODMAN) exec dsio-core-api alembic upgrade head
+
+# ==============================================================================
+# Tests automatisés
+# ==============================================================================
+
+# Lance la suite de tests d'intégration contre la stack déjà démarrée
+# (installe pytest/requests à la volée dans le conteneur core-api).
+test:
+	@echo "$(YELLOW) Installation des dépendances de test...$(NC)"
+	$(PODMAN) exec dsio-core-api pip install --quiet -r requirements-dev.txt
+	@echo "$(GREEN) Lancement des tests...$(NC)"
+	$(PODMAN) exec -e DSIO_TEST_BASE_URL=http://gateway:80 dsio-core-api python3 -m pytest
 
 # ==============================================================================
 # Règles de nettoyage
