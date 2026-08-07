@@ -67,7 +67,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./backend/alembic/versions:/app/alembic/versions
+      - ./backend/alembic/versions:/app/alembic/versions:z
     networks:
       - dsio-internal-net
     depends_on:
@@ -85,7 +85,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./backend/alembic/versions:/app/alembic/versions
+      - ./backend/alembic/versions:/app/alembic/versions:z
     networks:
       - dsio-internal-net
     depends_on:
@@ -125,7 +125,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./backend/alembic/versions:/app/alembic/versions
+      - ./backend/alembic/versions:/app/alembic/versions:z
     networks:
       - dsio-internal-net
     depends_on:
@@ -145,7 +145,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./backend/alembic/versions:/app/alembic/versions
+      - ./backend/alembic/versions:/app/alembic/versions:z
     networks:
       - dsio-internal-net
     depends_on:
@@ -165,7 +165,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./backend/alembic/versions:/app/alembic/versions
+      - ./backend/alembic/versions:/app/alembic/versions:z
     networks:
       - dsio-internal-net
     depends_on:
