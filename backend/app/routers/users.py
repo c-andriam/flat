@@ -1,10 +1,11 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Path
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 from sqlalchemy.exc import IntegrityError
 
-from app.database import get_db
+from app.database import get_async_db
 from app.models.user import User, UserRole
 from app.schemas.user_schema import UserOut, UserUpdate
 from app.services.security import require_role
@@ -26,8 +27,9 @@ ADMIN_ONLY_RESPONSES = {
     response_description="Liste des utilisateurs.",
     responses=ADMIN_ONLY_RESPONSES,
 )
-def list_users(db: Session = Depends(get_db)):
-    return db.query(User).order_by(User.display_name).limit(1000).all()
+async def list_users(db: AsyncSession = Depends(get_async_db)):
+    result = await db.execute(select(User).order_by(User.display_name).limit(1000))
+    return result.scalars().all()
 
 
 @router.get(
@@ -39,11 +41,12 @@ def list_users(db: Session = Depends(get_db)):
     response_description="L'utilisateur demandé.",
     responses={**ADMIN_ONLY_RESPONSES, 404: {"description": "Aucun utilisateur avec cet identifiant."}},
 )
-def get_user(
+async def get_user(
     user_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du compte utilisateur."),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
-    user = db.query(User).filter(User.id == user_id).first()
+    result = await db.execute(select(User).filter(User.id == user_id))
+    user = result.scalars().first()
     if not user:
         raise HTTPException(status_code=404, detail="Utilisateur introuvable")
     return user
@@ -65,13 +68,14 @@ def get_user(
         422: {"description": "Valeur de `role` invalide."},
     },
 )
-def update_user(
+async def update_user(
     user_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du compte utilisateur à modifier."),
     payload: UserUpdate = None,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Un admin peut changer le rôle (RBAC) ou désactiver un compte."""
-    user = db.query(User).filter(User.id == user_id).first()
+    result = await db.execute(select(User).filter(User.id == user_id))
+    user = result.scalars().first()
     if not user:
         raise HTTPException(status_code=404, detail="Utilisateur introuvable")
 
@@ -87,12 +91,12 @@ def update_user(
         setattr(user, field, value)
 
     try:
-        db.commit()
+        await db.commit()
     except IntegrityError:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(status_code=409, detail="Conflit lors de la mise à jour")
 
-    db.refresh(user)
+    await db.refresh(user)
     return user
 
 
@@ -110,13 +114,14 @@ def update_user(
     response_description="Aucun contenu — suppression effectuée.",
     responses={**ADMIN_ONLY_RESPONSES, 404: {"description": "Aucun utilisateur avec cet identifiant."}},
 )
-def delete_user(
+async def delete_user(
     user_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du compte utilisateur à supprimer."),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
-    user = db.query(User).filter(User.id == user_id).first()
+    result = await db.execute(select(User).filter(User.id == user_id))
+    user = result.scalars().first()
     if not user:
         raise HTTPException(status_code=404, detail="Utilisateur introuvable")
 
-    db.delete(user)
-    db.commit()
+    await db.delete(user)
+    await db.commit()

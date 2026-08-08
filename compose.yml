@@ -40,6 +40,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      network: host
     container_name: dsio-auth-api
     dns:
       - 10.89.0.1
@@ -59,6 +60,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      network: host
     container_name: dsio-core-api
     dns:
       - 10.89.0.1
@@ -81,6 +83,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      network: host
     container_name: dsio-realtime-hub
     dns:
       - 10.89.0.1
@@ -105,6 +108,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      network: host
     container_name: dsio-worker-ingestion
     dns:
       - 10.89.0.1
@@ -127,6 +131,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      network: host
     container_name: dsio-worker-writeback
     dns:
       - 10.89.0.1
@@ -149,6 +154,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      network: host
     container_name: dsio-scheduler-notifications
     dns:
       - 10.89.0.1
@@ -175,6 +181,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      network: host
     container_name: dsio-frontend
     restart: always
     networks:

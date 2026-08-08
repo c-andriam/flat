@@ -3,12 +3,15 @@ import os
 import uuid
 from datetime import date
 
-import redis
+import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException, Query, Path
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy.orm import joinedload, selectinload
 
-from app.database import get_db
+from app.database import get_async_db
 from app.models.project import (
     Action,
     ActionStatus,
@@ -31,15 +34,15 @@ from app.schemas.project_schema import (
     ResponsableUpdate,
     SyncLogOut,
 )
-from app.services.health import perform_health_check
+from app.services.health import perform_health_check_async
 
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
-redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+redis_client = aioredis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
 
-def publish_event(event_type: str, data: dict):
-    """Publie un événement JSON sur le canal Redis Pub/Sub dsio-events."""
+async def publish_event(event_type: str, data: dict):
+    """Publie un événement JSON sur le canal Redis Pub/Sub dsio-events (non-bloquant)."""
     try:
         def default_serializer(obj):
             if isinstance(obj, uuid.UUID):
@@ -49,9 +52,10 @@ def publish_event(event_type: str, data: dict):
             raise TypeError(f"Type not serializable: {type(obj)}")
 
         message = json.dumps({"type": event_type, "payload": data}, default=default_serializer)
-        redis_client.publish("dsio-events", message)
+        await redis_client.publish("dsio-events", message)
     except Exception:
         pass  # Ne pas bloquer l'API si Redis est indisponible
+
 router = APIRouter(tags=["core"])
 
 
@@ -67,8 +71,9 @@ router = APIRouter(tags=["core"])
     description="Retourne tous les projets suivis, triés par code projet.",
     response_description="Liste des projets.",
 )
-def list_projects(db: Session = Depends(get_db)):
-    return db.query(Project).order_by(Project.code).limit(1000).all()
+async def list_projects(db: AsyncSession = Depends(get_async_db)):
+    result = await db.execute(select(Project).order_by(Project.code).limit(1000))
+    return result.scalars().all()
 
 
 @router.get(
@@ -80,16 +85,16 @@ def list_projects(db: Session = Depends(get_db)):
     response_description="Projet avec ses actions imbriquées.",
     responses={404: {"description": "Aucun projet avec cet identifiant."}},
 )
-def get_project(
+async def get_project(
     project_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du projet."),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
-    project = (
-        db.query(Project)
-        .options(joinedload(Project.actions).joinedload(Action.responsables))
+    result = await db.execute(
+        select(Project)
+        .options(selectinload(Project.actions).selectinload(Action.responsables))
         .filter(Project.id == project_id)
-        .first()
     )
+    project = result.scalars().first()
     if not project:
         raise HTTPException(status_code=404, detail="Projet introuvable")
     return project
@@ -105,17 +110,17 @@ def get_project(
     response_description="Le projet créé.",
     responses={409: {"description": "Un projet avec ce code existe déjà."}},
 )
-def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
+async def create_project(payload: ProjectCreate, db: AsyncSession = Depends(get_async_db)):
     project = Project(**payload.model_dump())
     db.add(project)
     try:
-        db.commit()
+        await db.commit()
     except IntegrityError:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(status_code=409, detail=f"Le projet '{payload.code}' existe déjà")
         
-    db.refresh(project)
-    publish_event("project_created", {"id": project.id, "code": project.code, "name": project.name})
+    await db.refresh(project)
+    await publish_event("project_created", {"id": project.id, "code": project.code, "name": project.name})
     return project
 
 
@@ -128,12 +133,13 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
     response_description="Le projet mis à jour.",
     responses={404: {"description": "Aucun projet avec cet identifiant."}},
 )
-def update_project(
+async def update_project(
     project_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du projet à modifier."),
     payload: ProjectUpdate = None,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
-    project = db.query(Project).filter(Project.id == project_id).first()
+    result = await db.execute(select(Project).filter(Project.id == project_id))
+    project = result.scalars().first()
     if not project:
         raise HTTPException(status_code=404, detail="Projet introuvable")
 
@@ -141,13 +147,13 @@ def update_project(
         setattr(project, field, value)
 
     try:
-        db.commit()
+        await db.commit()
     except IntegrityError:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(status_code=409, detail="Conflit lors de la mise à jour (ex: code déjà utilisé)")
         
-    db.refresh(project)
-    publish_event("project_updated", {"id": project.id, "code": project.code})
+    await db.refresh(project)
+    await publish_event("project_updated", {"id": project.id, "code": project.code})
     return project
 
 
@@ -160,17 +166,18 @@ def update_project(
     response_description="Aucun contenu — suppression effectuée.",
     responses={404: {"description": "Aucun projet avec cet identifiant."}},
 )
-def delete_project(
+async def delete_project(
     project_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du projet à supprimer."),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
-    project = db.query(Project).filter(Project.id == project_id).first()
+    result = await db.execute(select(Project).filter(Project.id == project_id))
+    project = result.scalars().first()
     if not project:
         raise HTTPException(status_code=404, detail="Projet introuvable")
 
-    db.delete(project)  # cascade -> supprime aussi les actions liées
-    db.commit()
-    publish_event("project_deleted", {"id": project_id})
+    await db.delete(project)  # cascade -> supprime aussi les actions liées
+    await db.commit()
+    await publish_event("project_deleted", {"id": project_id})
 
 
 # ---------------------------------------------------------------------------
@@ -189,21 +196,23 @@ def delete_project(
     ),
     response_description="Liste des actions correspondant aux filtres.",
 )
-def list_actions(
+async def list_actions(
     project_id: uuid.UUID | None = Query(None, description="Filtrer par identifiant de projet."),
     responsable: str | None = Query(None, description="Filtrer par nom affiché du responsable."),
     overdue_only: bool = Query(False, description="Ne retourner que les actions en retard."),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ):
-    query = db.query(Action).options(joinedload(Action.responsables))
+    stmt = select(Action).options(selectinload(Action.responsables))
 
     if project_id is not None:
-        query = query.filter(Action.project_id == project_id)
+        stmt = stmt.filter(Action.project_id == project_id)
 
     if responsable is not None:
-        query = query.join(Action.responsables).filter(Responsable.display_name == responsable)
+        stmt = stmt.join(Action.responsables).filter(Responsable.display_name == responsable)
 
-    actions = query.limit(1000).all()
+    stmt = stmt.limit(1000)
+    result = await db.execute(stmt)
+    actions = result.scalars().unique().all()
 
     if overdue_only:
         today = date.today()
@@ -221,30 +230,31 @@ def list_actions(
     response_description="L'action demandée.",
     responses={404: {"description": "Aucune action avec cet identifiant."}},
 )
-def get_action(
+async def get_action(
     action_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) de l'action."),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
-    action = (
-        db.query(Action)
-        .options(joinedload(Action.responsables))
+    result = await db.execute(
+        select(Action)
+        .options(selectinload(Action.responsables))
         .filter(Action.id == action_id)
-        .first()
     )
+    action = result.scalars().first()
     if not action:
         raise HTTPException(status_code=404, detail="Action introuvable")
     return action
 
 
-def _generate_numero(db, project, phase):
-    query = db.query(Action.numero).filter(Action.project_id == project.id)
+async def _generate_numero(db: AsyncSession, project, phase):
+    stmt = select(Action.numero).filter(Action.project_id == project.id)
     if phase is not None:
-        query = query.filter(Action.phase == phase)
+        stmt = stmt.filter(Action.phase == phase)
     else:
-        query = query.filter(Action.phase.is_(None))
+        stmt = stmt.filter(Action.phase.is_(None))
 
+    result = await db.execute(stmt)
     max_num = 0
-    for (numero_str,) in query.all():
+    for (numero_str,) in result.all():
         if numero_str and "-" in numero_str:
             try:
                 max_num = max(max_num, int(numero_str.split("-")[-1]))
@@ -272,8 +282,9 @@ def _generate_numero(db, project, phase):
     response_description="L'action créée.",
     responses={404: {"description": "Le projet référencé est introuvable."}},
 )
-def create_action(payload: ActionCreate, db: Session = Depends(get_db)):
-    project = db.query(Project).filter(Project.id == payload.project_id).first()
+async def create_action(payload: ActionCreate, db: AsyncSession = Depends(get_async_db)):
+    result = await db.execute(select(Project).filter(Project.id == payload.project_id))
+    project = result.scalars().first()
     if not project:
         raise HTTPException(status_code=404, detail="Projet introuvable")
 
@@ -293,11 +304,14 @@ def create_action(payload: ActionCreate, db: Session = Depends(get_db)):
     # contente ici de régénérer un numero frais et de réessayer.
     max_attempts = 5
     for attempt in range(1, max_attempts + 1):
-        generated_numero = _generate_numero(db, project, phase)
+        generated_numero = await _generate_numero(db, project, phase)
         action = Action(**data, numero=generated_numero, phase=phase)
 
         for name in payload.responsable_names:
-            responsable = db.query(Responsable).filter(Responsable.display_name == name).first()
+            res_result = await db.execute(
+                select(Responsable).filter(Responsable.display_name == name)
+            )
+            responsable = res_result.scalars().first()
             if not responsable:
                 responsable = Responsable(display_name=name, is_mapped=False)
                 db.add(responsable)
@@ -305,9 +319,9 @@ def create_action(payload: ActionCreate, db: Session = Depends(get_db)):
 
         db.add(action)
         try:
-            db.commit()
+            await db.commit()
         except IntegrityError:
-            db.rollback()
+            await db.rollback()
             if attempt == max_attempts:
                 raise HTTPException(
                     status_code=409,
@@ -315,8 +329,8 @@ def create_action(payload: ActionCreate, db: Session = Depends(get_db)):
                 )
             continue
         else:
-            db.refresh(action)
-            publish_event("action_created", {"id": action.id, "numero": action.numero, "project_id": action.project_id})
+            await db.refresh(action)
+            await publish_event("action_created", {"id": action.id, "numero": action.numero, "project_id": action.project_id})
             return action
 
 
@@ -337,12 +351,15 @@ def create_action(payload: ActionCreate, db: Session = Depends(get_db)):
         422: {"description": "Valeur de `status` invalide."},
     },
 )
-def update_action(
+async def update_action(
     action_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) de l'action à modifier."),
     payload: ActionUpdate = None,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
-    action = db.query(Action).filter(Action.id == action_id).first()
+    result = await db.execute(
+        select(Action).options(selectinload(Action.project)).filter(Action.id == action_id)
+    )
+    action = result.scalars().first()
     if not action:
         raise HTTPException(status_code=404, detail="Action introuvable")
 
@@ -358,7 +375,12 @@ def update_action(
     # regénérer numero (qui encode la phase, ex: P01-01-05) pour éviter
     # qu'il reste désynchronisé de la vraie phase de l'action.
     if "phase" in update_data:
-        project = action.project
+        # Eager-load project if not already loaded
+        if not action.project:
+            proj_result = await db.execute(select(Project).filter(Project.id == action.project_id))
+            project = proj_result.scalars().first()
+        else:
+            project = action.project
         new_phase = update_data["phase"]
 
         if project.has_phases and not new_phase:
@@ -373,7 +395,7 @@ def update_action(
             )
 
         if new_phase != action.phase:
-            update_data["numero"] = _generate_numero(db, project, new_phase)
+            update_data["numero"] = await _generate_numero(db, project, new_phase)
 
     for field, value in update_data.items():
         setattr(action, field, value)
@@ -384,13 +406,13 @@ def update_action(
             action.date_realisation = date.today()
 
     try:
-        db.commit()
+        await db.commit()
     except IntegrityError:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(status_code=409, detail="Conflit lors de la mise à jour de l'action (numéro déjà utilisé ?)")
         
-    db.refresh(action)
-    publish_event("action_updated", {"id": action.id, "numero": action.numero, "status": action.status})
+    await db.refresh(action)
+    await publish_event("action_updated", {"id": action.id, "numero": action.numero, "status": action.status})
     return action
 
 
@@ -403,17 +425,18 @@ def update_action(
     response_description="Aucun contenu — suppression effectuée.",
     responses={404: {"description": "Aucune action avec cet identifiant."}},
 )
-def delete_action(
+async def delete_action(
     action_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) de l'action à supprimer."),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
-    action = db.query(Action).filter(Action.id == action_id).first()
+    result = await db.execute(select(Action).filter(Action.id == action_id))
+    action = result.scalars().first()
     if not action:
         raise HTTPException(status_code=404, detail="Action introuvable")
 
-    db.delete(action)
-    db.commit()
-    publish_event("action_deleted", {"id": action_id})
+    await db.delete(action)
+    await db.commit()
+    await publish_event("action_deleted", {"id": action_id})
 
 
 # ---------------------------------------------------------------------------
@@ -428,14 +451,16 @@ def delete_action(
     description="Retourne les responsables, avec option pour ne lister que ceux non encore mappés à un email.",
     response_description="Liste des responsables.",
 )
-def list_responsables(
+async def list_responsables(
     unmapped_only: bool = Query(False, description="Ne retourner que les responsables sans email associé."),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ):
-    query = db.query(Responsable)
+    stmt = select(Responsable)
     if unmapped_only:
-        query = query.filter(Responsable.is_mapped.is_(False))
-    return query.order_by(Responsable.display_name).limit(1000).all()
+        stmt = stmt.filter(Responsable.is_mapped.is_(False))
+    stmt = stmt.order_by(Responsable.display_name).limit(1000)
+    result = await db.execute(stmt)
+    return result.scalars().all()
 
 
 @router.get(
@@ -446,11 +471,12 @@ def list_responsables(
     response_description="Le responsable demandé.",
     responses={404: {"description": "Aucun responsable avec cet identifiant."}},
 )
-def get_responsable(
+async def get_responsable(
     responsable_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du responsable."),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
-    responsable = db.query(Responsable).filter(Responsable.id == responsable_id).first()
+    result = await db.execute(select(Responsable).filter(Responsable.id == responsable_id))
+    responsable = result.scalars().first()
     if not responsable:
         raise HTTPException(status_code=404, detail="Responsable introuvable")
     return responsable
@@ -466,7 +492,7 @@ def get_responsable(
     response_description="Le responsable créé.",
     responses={409: {"description": "Un responsable avec ce nom affiché existe déjà."}},
 )
-def create_responsable(payload: ResponsableCreate, db: Session = Depends(get_db)):
+async def create_responsable(payload: ResponsableCreate, db: AsyncSession = Depends(get_async_db)):
     responsable = Responsable(
         display_name=payload.display_name,
         email=payload.email,
@@ -474,13 +500,13 @@ def create_responsable(payload: ResponsableCreate, db: Session = Depends(get_db)
     )
     db.add(responsable)
     try:
-        db.commit()
+        await db.commit()
     except IntegrityError:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(status_code=409, detail="Ce responsable existe déjà")
         
-    db.refresh(responsable)
-    publish_event("responsable_created", {"id": responsable.id, "display_name": responsable.display_name})
+    await db.refresh(responsable)
+    await publish_event("responsable_created", {"id": responsable.id, "display_name": responsable.display_name})
     return responsable
 
 
@@ -493,12 +519,13 @@ def create_responsable(payload: ResponsableCreate, db: Session = Depends(get_db)
     response_description="Le responsable mis à jour.",
     responses={404: {"description": "Aucun responsable avec cet identifiant."}},
 )
-def update_responsable(
+async def update_responsable(
     responsable_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du responsable."),
     payload: ResponsableUpdate = None,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
-    responsable = db.query(Responsable).filter(Responsable.id == responsable_id).first()
+    result = await db.execute(select(Responsable).filter(Responsable.id == responsable_id))
+    responsable = result.scalars().first()
     if not responsable:
         raise HTTPException(status_code=404, detail="Responsable introuvable")
 
@@ -507,13 +534,13 @@ def update_responsable(
         responsable.is_mapped = True
 
     try:
-        db.commit()
+        await db.commit()
     except IntegrityError:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(status_code=409, detail="Conflit lors de la mise à jour (ex: nom déjà pris)")
         
-    db.refresh(responsable)
-    publish_event("responsable_updated", {"id": responsable.id, "display_name": responsable.display_name})
+    await db.refresh(responsable)
+    await publish_event("responsable_updated", {"id": responsable.id, "display_name": responsable.display_name})
     return responsable
 
 
@@ -525,17 +552,18 @@ def update_responsable(
     response_description="Aucun contenu — suppression effectuée.",
     responses={404: {"description": "Aucun responsable avec cet identifiant."}},
 )
-def delete_responsable(
+async def delete_responsable(
     responsable_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du responsable à supprimer."),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
-    responsable = db.query(Responsable).filter(Responsable.id == responsable_id).first()
+    result = await db.execute(select(Responsable).filter(Responsable.id == responsable_id))
+    responsable = result.scalars().first()
     if not responsable:
         raise HTTPException(status_code=404, detail="Responsable introuvable")
 
-    db.delete(responsable)
-    db.commit()
-    publish_event("responsable_deleted", {"id": responsable_id})
+    await db.delete(responsable)
+    await db.commit()
+    await publish_event("responsable_deleted", {"id": responsable_id})
 
 
 # ---------------------------------------------------------------------------
@@ -553,8 +581,11 @@ def delete_responsable(
     description="Les 50 dernières synchronisations d'import Excel, les plus récentes en premier. Lecture seule.",
     response_description="Liste des journaux de synchronisation.",
 )
-def list_sync_logs(db: Session = Depends(get_db)):
-    logs = db.query(SyncLog).order_by(SyncLog.started_at.desc()).limit(50).all()
+async def list_sync_logs(db: AsyncSession = Depends(get_async_db)):
+    result = await db.execute(
+        select(SyncLog).order_by(SyncLog.started_at.desc()).limit(50)
+    )
+    logs = result.scalars().all()
     return [
         {
             "id": log.id,
@@ -576,8 +607,11 @@ def list_sync_logs(db: Session = Depends(get_db)):
     description="Les 50 derniers envois de relance aux responsables, les plus récents en premier. Lecture seule.",
     response_description="Liste des journaux de relance.",
 )
-def list_relance_logs(db: Session = Depends(get_db)):
-    logs = db.query(RelanceLog).order_by(RelanceLog.sent_at.desc()).limit(50).all()
+async def list_relance_logs(db: AsyncSession = Depends(get_async_db)):
+    result = await db.execute(
+        select(RelanceLog).order_by(RelanceLog.sent_at.desc()).limit(50)
+    )
+    logs = result.scalars().all()
     return [
         {
             "id": log.id,
@@ -598,5 +632,5 @@ def list_relance_logs(db: Session = Depends(get_db)):
     summary="Vérifier l'état du service core (API v1)",
     description="Endpoint de health check accessible sur /api/v1/health.",
 )
-def health_check_v1(db: Session = Depends(get_db)):
-    return perform_health_check(db)
+async def health_check_v1(db: AsyncSession = Depends(get_async_db)):
+    return await perform_health_check_async(db)

@@ -5,9 +5,10 @@ from datetime import datetime, timedelta, timezone
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import jwt
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 
-from app.database import get_db
+from app.database import get_async_db
 from app.models.user import User
 
 SECRET_KEY = os.environ["SECRET_KEY"]
@@ -38,13 +39,14 @@ def decode_access_token(token: str) -> dict:
         )
 
 
-def get_current_user(
+async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> User:
     """Dépendance FastAPI pour protéger les routes core-api/realtime-hub."""
     payload = decode_access_token(credentials.credentials)
-    user = db.query(User).filter(User.id == uuid.UUID(payload["sub"])).first()
+    result = await db.execute(select(User).filter(User.id == uuid.UUID(payload["sub"])))
+    user = result.scalars().first()
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="Compte introuvable ou désactivé")
     return user
@@ -53,7 +55,7 @@ def get_current_user(
 def require_role(*allowed_roles: str):
     """Dépendance factory pour restreindre une route à certains rôles (RBAC)."""
 
-    def _check(user: User = Depends(get_current_user)) -> User:
+    async def _check(user: User = Depends(get_current_user)) -> User:
         if user.role.value not in allowed_roles:
             raise HTTPException(status_code=403, detail="Permission refusée")
         return user

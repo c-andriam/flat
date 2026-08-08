@@ -4,11 +4,12 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from fastapi.responses import RedirectResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
-from app.database import get_db
+from app.database import get_async_db
 from app.models.user import User
 from app.services import microsoft
 from app.services.security import create_access_token, get_current_user
@@ -70,11 +71,11 @@ def login(request: Request):
     },
 )
 @limiter.limit("5/minute")
-def callback(
+async def callback(
     request: Request,
     code: str = Query(..., description="Le code d'autorisation retourné par Microsoft Entra ID."),
     state: str = Query(..., description="L'état anti-CSRF initialement généré par /login."),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """
     Microsoft redirige ici après connexion avec ?code=...&state=...
@@ -99,7 +100,8 @@ def callback(
     if not azure_object_id or not email:
         raise HTTPException(status_code=400, detail="Claims Microsoft incomplets")
 
-    user = db.query(User).filter(User.azure_object_id == azure_object_id).first()
+    result = await db.execute(select(User).filter(User.azure_object_id == azure_object_id))
+    user = result.scalars().first()
     if not user:
         user = User(azure_object_id=azure_object_id, email=email, display_name=display_name)
         db.add(user)
@@ -108,8 +110,8 @@ def callback(
         user.display_name = display_name
 
     user.last_login_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(user)
+    await db.commit()
+    await db.refresh(user)
 
     token = create_access_token(user)
 

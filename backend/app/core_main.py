@@ -1,13 +1,18 @@
 import os
 
+from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
+from redis import asyncio as aioredis
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.database import get_async_db
 from app.routers import core as core_router
 from app.routers import users as users_router
-from app.services.health import perform_health_check
+from app.services.health import perform_health_check_async
+
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 
 tags_metadata = [
     {
@@ -47,6 +52,7 @@ tags_metadata = [
         "description": "Endpoints de supervision (health checks).",
     },
 ]
+
 
 app = FastAPI(
     title="DSIO - Project Management Core API",
@@ -117,9 +123,9 @@ app.add_middleware(
         }
     },
 )
-def health_check(db: Session = Depends(get_db)):
+async def health_check(db: AsyncSession = Depends(get_async_db)):
     """Vérifie que l'API tourne et que PostgreSQL répond aux requêtes à la racine."""
-    return perform_health_check(db)
+    return await perform_health_check_async(db)
 
 
 # NOTE : /api/v1/health est défini une seule fois, dans routers/core.py
