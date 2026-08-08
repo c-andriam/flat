@@ -75,6 +75,7 @@ def upgrade() -> None:
         sa.Column('created_at', sa.DateTime(), nullable=False),
         sa.Column('updated_at', sa.DateTime(), nullable=False),
     )
+    op.create_index(op.f('ix_actions_project_id'), 'actions', ['project_id'], unique=False)
 
     op.create_table(
         'action_responsables',
@@ -100,12 +101,15 @@ def upgrade() -> None:
         sa.Column('action_ids', sa.Text(), nullable=False),
         sa.Column('email_status', sa.String(length=50), nullable=False, server_default='sent'),
     )
+    op.create_index(op.f('ix_relance_logs_responsable_id'), 'relance_logs', ['responsable_id'], unique=False)
 
 
 def downgrade() -> None:
+    op.drop_index(op.f('ix_relance_logs_responsable_id'), table_name='relance_logs')
     op.drop_table('relance_logs')
     op.drop_table('sync_logs')
     op.drop_table('action_responsables')
+    op.drop_index(op.f('ix_actions_project_id'), table_name='actions')
     op.drop_table('actions')
     op.drop_table('projects')
     op.drop_table('responsables')

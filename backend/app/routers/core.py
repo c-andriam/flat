@@ -1,9 +1,13 @@
+import json
+import os
 import uuid
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session, joinedload
+import redis
+from fastapi import APIRouter, Depends, HTTPException, Query, Path
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, joinedload
+
 from app.database import get_db
 from app.models.project import (
     Action,
@@ -29,6 +33,25 @@ from app.schemas.project_schema import (
 )
 from app.services.health import perform_health_check
 
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+
+
+def publish_event(event_type: str, data: dict):
+    """Publie un événement JSON sur le canal Redis Pub/Sub dsio-events."""
+    try:
+        def default_serializer(obj):
+            if isinstance(obj, uuid.UUID):
+                return str(obj)
+            if hasattr(obj, "isoformat"):
+                return obj.isoformat()
+            raise TypeError(f"Type not serializable: {type(obj)}")
+
+        message = json.dumps({"type": event_type, "payload": data}, default=default_serializer)
+        redis_client.publish("dsio-events", message)
+    except Exception:
+        pass  # Ne pas bloquer l'API si Redis est indisponible
 router = APIRouter(tags=["core"])
 
 
@@ -45,7 +68,7 @@ router = APIRouter(tags=["core"])
     response_description="Liste des projets.",
 )
 def list_projects(db: Session = Depends(get_db)):
-    return db.query(Project).order_by(Project.code).all()
+    return db.query(Project).order_by(Project.code).limit(1000).all()
 
 
 @router.get(
@@ -57,7 +80,10 @@ def list_projects(db: Session = Depends(get_db)):
     response_description="Projet avec ses actions imbriquées.",
     responses={404: {"description": "Aucun projet avec cet identifiant."}},
 )
-def get_project(project_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_project(
+    project_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du projet."),
+    db: Session = Depends(get_db)
+):
     project = (
         db.query(Project)
         .options(joinedload(Project.actions).joinedload(Action.responsables))
@@ -80,14 +106,16 @@ def get_project(project_id: uuid.UUID, db: Session = Depends(get_db)):
     responses={409: {"description": "Un projet avec ce code existe déjà."}},
 )
 def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
-    existing = db.query(Project).filter(Project.code == payload.code).first()
-    if existing:
-        raise HTTPException(status_code=409, detail=f"Le projet '{payload.code}' existe déjà")
-
     project = Project(**payload.model_dump())
     db.add(project)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=f"Le projet '{payload.code}' existe déjà")
+        
     db.refresh(project)
+    publish_event("project_created", {"id": project.id, "code": project.code, "name": project.name})
     return project
 
 
@@ -100,7 +128,11 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
     response_description="Le projet mis à jour.",
     responses={404: {"description": "Aucun projet avec cet identifiant."}},
 )
-def update_project(project_id: uuid.UUID, payload: ProjectUpdate, db: Session = Depends(get_db)):
+def update_project(
+    project_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du projet à modifier."),
+    payload: ProjectUpdate = None,
+    db: Session = Depends(get_db)
+):
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Projet introuvable")
@@ -108,8 +140,14 @@ def update_project(project_id: uuid.UUID, payload: ProjectUpdate, db: Session = 
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(project, field, value)
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Conflit lors de la mise à jour (ex: code déjà utilisé)")
+        
     db.refresh(project)
+    publish_event("project_updated", {"id": project.id, "code": project.code})
     return project
 
 
@@ -122,13 +160,17 @@ def update_project(project_id: uuid.UUID, payload: ProjectUpdate, db: Session = 
     response_description="Aucun contenu — suppression effectuée.",
     responses={404: {"description": "Aucun projet avec cet identifiant."}},
 )
-def delete_project(project_id: uuid.UUID, db: Session = Depends(get_db)):
+def delete_project(
+    project_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du projet à supprimer."),
+    db: Session = Depends(get_db)
+):
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Projet introuvable")
 
     db.delete(project)  # cascade -> supprime aussi les actions liées
     db.commit()
+    publish_event("project_deleted", {"id": project_id})
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +203,7 @@ def list_actions(
     if responsable is not None:
         query = query.join(Action.responsables).filter(Responsable.display_name == responsable)
 
-    actions = query.all()
+    actions = query.limit(1000).all()
 
     if overdue_only:
         today = date.today()
@@ -179,7 +221,10 @@ def list_actions(
     response_description="L'action demandée.",
     responses={404: {"description": "Aucune action avec cet identifiant."}},
 )
-def get_action(action_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_action(
+    action_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) de l'action."),
+    db: Session = Depends(get_db)
+):
     action = (
         db.query(Action)
         .options(joinedload(Action.responsables))
@@ -271,6 +316,7 @@ def create_action(payload: ActionCreate, db: Session = Depends(get_db)):
             continue
         else:
             db.refresh(action)
+            publish_event("action_created", {"id": action.id, "numero": action.numero, "project_id": action.project_id})
             return action
 
 
@@ -291,7 +337,11 @@ def create_action(payload: ActionCreate, db: Session = Depends(get_db)):
         422: {"description": "Valeur de `status` invalide."},
     },
 )
-def update_action(action_id: uuid.UUID, payload: ActionUpdate, db: Session = Depends(get_db)):
+def update_action(
+    action_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) de l'action à modifier."),
+    payload: ActionUpdate = None,
+    db: Session = Depends(get_db)
+):
     action = db.query(Action).filter(Action.id == action_id).first()
     if not action:
         raise HTTPException(status_code=404, detail="Action introuvable")
@@ -333,8 +383,14 @@ def update_action(action_id: uuid.UUID, payload: ActionUpdate, db: Session = Dep
         if action.date_realisation is None:
             action.date_realisation = date.today()
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Conflit lors de la mise à jour de l'action (numéro déjà utilisé ?)")
+        
     db.refresh(action)
+    publish_event("action_updated", {"id": action.id, "numero": action.numero, "status": action.status})
     return action
 
 
@@ -347,13 +403,17 @@ def update_action(action_id: uuid.UUID, payload: ActionUpdate, db: Session = Dep
     response_description="Aucun contenu — suppression effectuée.",
     responses={404: {"description": "Aucune action avec cet identifiant."}},
 )
-def delete_action(action_id: uuid.UUID, db: Session = Depends(get_db)):
+def delete_action(
+    action_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) de l'action à supprimer."),
+    db: Session = Depends(get_db)
+):
     action = db.query(Action).filter(Action.id == action_id).first()
     if not action:
         raise HTTPException(status_code=404, detail="Action introuvable")
 
     db.delete(action)
     db.commit()
+    publish_event("action_deleted", {"id": action_id})
 
 
 # ---------------------------------------------------------------------------
@@ -375,7 +435,7 @@ def list_responsables(
     query = db.query(Responsable)
     if unmapped_only:
         query = query.filter(Responsable.is_mapped.is_(False))
-    return query.order_by(Responsable.display_name).all()
+    return query.order_by(Responsable.display_name).limit(1000).all()
 
 
 @router.get(
@@ -386,7 +446,10 @@ def list_responsables(
     response_description="Le responsable demandé.",
     responses={404: {"description": "Aucun responsable avec cet identifiant."}},
 )
-def get_responsable(responsable_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_responsable(
+    responsable_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du responsable."),
+    db: Session = Depends(get_db)
+):
     responsable = db.query(Responsable).filter(Responsable.id == responsable_id).first()
     if not responsable:
         raise HTTPException(status_code=404, detail="Responsable introuvable")
@@ -404,18 +467,20 @@ def get_responsable(responsable_id: uuid.UUID, db: Session = Depends(get_db)):
     responses={409: {"description": "Un responsable avec ce nom affiché existe déjà."}},
 )
 def create_responsable(payload: ResponsableCreate, db: Session = Depends(get_db)):
-    existing = db.query(Responsable).filter(Responsable.display_name == payload.display_name).first()
-    if existing:
-        raise HTTPException(status_code=409, detail="Ce responsable existe déjà")
-
     responsable = Responsable(
         display_name=payload.display_name,
         email=payload.email,
         is_mapped=payload.email is not None,
     )
     db.add(responsable)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Ce responsable existe déjà")
+        
     db.refresh(responsable)
+    publish_event("responsable_created", {"id": responsable.id, "display_name": responsable.display_name})
     return responsable
 
 
@@ -428,7 +493,11 @@ def create_responsable(payload: ResponsableCreate, db: Session = Depends(get_db)
     response_description="Le responsable mis à jour.",
     responses={404: {"description": "Aucun responsable avec cet identifiant."}},
 )
-def update_responsable(responsable_id: uuid.UUID, payload: ResponsableUpdate, db: Session = Depends(get_db)):
+def update_responsable(
+    responsable_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du responsable."),
+    payload: ResponsableUpdate = None,
+    db: Session = Depends(get_db)
+):
     responsable = db.query(Responsable).filter(Responsable.id == responsable_id).first()
     if not responsable:
         raise HTTPException(status_code=404, detail="Responsable introuvable")
@@ -437,8 +506,14 @@ def update_responsable(responsable_id: uuid.UUID, payload: ResponsableUpdate, db
         responsable.email = payload.email
         responsable.is_mapped = True
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Conflit lors de la mise à jour (ex: nom déjà pris)")
+        
     db.refresh(responsable)
+    publish_event("responsable_updated", {"id": responsable.id, "display_name": responsable.display_name})
     return responsable
 
 
@@ -450,13 +525,17 @@ def update_responsable(responsable_id: uuid.UUID, payload: ResponsableUpdate, db
     response_description="Aucun contenu — suppression effectuée.",
     responses={404: {"description": "Aucun responsable avec cet identifiant."}},
 )
-def delete_responsable(responsable_id: uuid.UUID, db: Session = Depends(get_db)):
+def delete_responsable(
+    responsable_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du responsable à supprimer."),
+    db: Session = Depends(get_db)
+):
     responsable = db.query(Responsable).filter(Responsable.id == responsable_id).first()
     if not responsable:
         raise HTTPException(status_code=404, detail="Responsable introuvable")
 
     db.delete(responsable)
     db.commit()
+    publish_event("responsable_deleted", {"id": responsable_id})
 
 
 # ---------------------------------------------------------------------------

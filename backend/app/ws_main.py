@@ -3,6 +3,7 @@ import os
 
 import redis.asyncio as redis
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.services.security import decode_access_token
 
@@ -44,6 +45,16 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 redis_pool = redis.ConnectionPool.from_url(
     f"redis://{REDIS_HOST}:{REDIS_PORT}/0",
     decode_responses=True,
+)
+
+# --- CORS ---
+FRONTEND_ORIGIN = os.getenv("FRONTEND_URL", "http://localhost:8080")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[FRONTEND_ORIGIN],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 

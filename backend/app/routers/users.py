@@ -1,7 +1,8 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Path
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.database import get_db
 from app.models.user import User, UserRole
@@ -26,7 +27,7 @@ ADMIN_ONLY_RESPONSES = {
     responses=ADMIN_ONLY_RESPONSES,
 )
 def list_users(db: Session = Depends(get_db)):
-    return db.query(User).order_by(User.display_name).all()
+    return db.query(User).order_by(User.display_name).limit(1000).all()
 
 
 @router.get(
@@ -38,7 +39,10 @@ def list_users(db: Session = Depends(get_db)):
     response_description="L'utilisateur demandé.",
     responses={**ADMIN_ONLY_RESPONSES, 404: {"description": "Aucun utilisateur avec cet identifiant."}},
 )
-def get_user(user_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_user(
+    user_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du compte utilisateur."),
+    db: Session = Depends(get_db)
+):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Utilisateur introuvable")
@@ -61,7 +65,11 @@ def get_user(user_id: uuid.UUID, db: Session = Depends(get_db)):
         422: {"description": "Valeur de `role` invalide."},
     },
 )
-def update_user(user_id: uuid.UUID, payload: UserUpdate, db: Session = Depends(get_db)):
+def update_user(
+    user_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du compte utilisateur à modifier."),
+    payload: UserUpdate = None,
+    db: Session = Depends(get_db)
+):
     """Un admin peut changer le rôle (RBAC) ou désactiver un compte."""
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
@@ -78,7 +86,12 @@ def update_user(user_id: uuid.UUID, payload: UserUpdate, db: Session = Depends(g
     for field, value in update_data.items():
         setattr(user, field, value)
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Conflit lors de la mise à jour")
+
     db.refresh(user)
     return user
 
@@ -97,7 +110,10 @@ def update_user(user_id: uuid.UUID, payload: UserUpdate, db: Session = Depends(g
     response_description="Aucun contenu — suppression effectuée.",
     responses={**ADMIN_ONLY_RESPONSES, 404: {"description": "Aucun utilisateur avec cet identifiant."}},
 )
-def delete_user(user_id: uuid.UUID, db: Session = Depends(get_db)):
+def delete_user(
+    user_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du compte utilisateur à supprimer."),
+    db: Session = Depends(get_db)
+):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Utilisateur introuvable")

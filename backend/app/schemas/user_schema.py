@@ -1,14 +1,14 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class UserUpdate(BaseModel):
     """Seuls le rôle et le statut actif sont modifiables manuellement (admin)."""
 
-    role: str | None = None
-    is_active: bool | None = None
+    role: str | None = Field(None, description="Rôle RBAC (ex: 'admin', 'user').")
+    is_active: bool | None = Field(None, description="Désactiver le compte pour empêcher la connexion sans supprimer l'historique.")
 
 
 class UserOut(BaseModel):

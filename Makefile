@@ -13,7 +13,7 @@ NC			= \033[0m
 # ==============================================================================
 # Règles principales
 # ==============================================================================
-.PHONY: all build up down start stop status logs clean fclean re migrate makemigrations test
+.PHONY: all build up down start stop status logs clean fclean re migrate makemigrations db-update db-shell test
 
 # Règle par défaut
 all: up
@@ -66,6 +66,14 @@ makemigrations:
 migrate:
 	@echo "$(GREEN) Application des migrations Alembic...$(NC)"
 	$(PODMAN) exec dsio-core-api alembic upgrade head
+
+# Alias pour plus de clarté
+db-update: migrate
+
+# Ouvre un shell psql directement dans la base de données
+db-shell:
+	@echo "$(YELLOW) Connexion à la base de données PostgreSQL...$(NC)"
+	$(PODMAN) exec -it db psql -U postgres.qlrlqdrmjccubxkwanck -d postgres
 
 # ==============================================================================
 # Tests automatisés

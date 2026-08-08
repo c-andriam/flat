@@ -1,4 +1,10 @@
-from fastapi import FastAPI
+import os
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from app.routers import auth as auth_router
 
@@ -35,6 +41,21 @@ app = FastAPI(
     openapi_url="/api/v1/auth/openapi.json",
 )
 app.include_router(auth_router.router, prefix="/api/v1")
+
+# --- CORS ---
+FRONTEND_ORIGIN = os.getenv("FRONTEND_URL", "http://localhost:8080")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[FRONTEND_ORIGIN],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- Rate Limiting ---
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 @app.get(

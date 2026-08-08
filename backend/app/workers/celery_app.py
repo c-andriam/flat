@@ -10,7 +10,7 @@ app = Celery(
     "dsio",
     broker=BROKER_URL,
     backend=BROKER_URL,
-    include=["app.workers.ingestion", "app.workers.writeback"],
+    include=["app.workers.ingestion", "app.workers.writeback", "app.workers.notifications"],
 )
 
 app.conf.task_routes = {
@@ -19,9 +19,9 @@ app.conf.task_routes = {
 }
 
 app.conf.beat_schedule = {
-    # TODO: définir les tâches de relance Outlook (notifications) planifiées.
-    # "check-relances-outlook": {
-    #     "task": "app.workers.notifications.check_and_send",
-    #     "schedule": 3600.0,
-    # },
+    # Exécution quotidienne à 8h du matin pour les relances
+    "check-relances-quotidiennes": {
+        "task": "app.workers.notifications.check_and_send",
+        "schedule": 86400.0,  # TODO: utiliser crontab(hour=8, minute=0) plus tard
+    },
 }

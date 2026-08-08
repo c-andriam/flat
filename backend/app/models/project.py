@@ -105,7 +105,7 @@ class Action(UUIDMixin, Base):
     responsables = relationship("Responsable", secondary=action_responsables, back_populates="actions")  # D
 
     def is_overdue(self, today: date | None = None) -> bool:
-        today = today or date.today()
+        today = today or datetime.now(timezone.utc).date()
         return self.deadline is not None and self.deadline <= today and self.progress < 100.0
 
     def __repr__(self) -> str:
