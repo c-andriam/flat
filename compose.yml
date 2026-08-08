@@ -183,7 +183,11 @@ services:
       dockerfile: Dockerfile
       network: host
     container_name: dsio-frontend
+    user: "root"
     restart: always
+    command: sh -c "tailwindcss -i ./app/static/css/input.css -o ./app/static/css/output.css --minify && uvicorn app.main:app --host 0.0.0.0 --port 80 --reload"
+    volumes:
+      - ./frontend/app:/app/app:z
     networks:
       - dsio-internal-net
 

@@ -1,0 +1,10 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    /* Transitions for smooth dark/light toggling */
+    @apply transition-colors duration-200 ease-in-out;
+  }
+}
