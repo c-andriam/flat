@@ -1,0 +1,349 @@
+{% extends "dashboard_base.html" %}
+
+{% block dashboard_content %}
+<style>
+    /* Week Navigator - centered like screenshot */
+    .week-nav {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 20px;
+        margin-bottom: 20px;
+    }
+    .week-nav-label {
+        font-size: 20px;
+        font-weight: 400;
+        color: var(--accent-blue);
+        min-width: 280px;
+        text-align: center;
+        letter-spacing: -0.01em;
+    }
+    .week-nav-right {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .week-nav-today {
+        padding: 7px 18px;
+        font-size: 13px;
+        font-weight: 600;
+        color: #fff;
+        background: var(--accent-blue);
+        border: none;
+        border-radius: 4px;
+        text-decoration: none;
+        transition: opacity 0.15s;
+    }
+    .week-nav-today:hover { opacity: 0.85; }
+
+    .week-nav-arrow {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px;
+        height: 34px;
+        border-radius: 4px;
+        border: none;
+        background: var(--bg-surface);
+        border: 1px solid var(--border-default);
+        color: var(--text-secondary);
+        text-decoration: none;
+        transition: all 0.15s;
+    }
+    .week-nav-arrow:hover {
+        background: var(--bg-surface-hover);
+        color: var(--text-primary);
+    }
+
+    /* Slot Container */
+    .slot-container {
+        background: var(--bg-primary);
+        border: 1px solid var(--border-default);
+        border-radius: 8px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+
+    /* Sticky Day Header */
+    .slot-header-row {
+        display: grid;
+        grid-template-columns: 80px repeat(7, 1fr);
+        border-bottom: 2px solid var(--border-default);
+        flex-shrink: 0;
+    }
+    .slot-corner {
+        border-right: 1px solid var(--border-default);
+        background: var(--bg-primary);
+    }
+    .slot-day-header {
+        padding: 12px 4px;
+        text-align: center;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        border-right: 1px solid var(--border-default);
+        background: var(--bg-primary);
+    }
+    .slot-day-header:last-child { border-right: none; }
+    .slot-day-header.is-today {
+        color: var(--accent-blue);
+    }
+
+    /* Scrollable Body */
+    .slot-scroll-body {
+        overflow-y: auto;
+        max-height: calc(100vh - 280px);
+        padding-top: 8px; /* Ensure first hour label is not clipped */
+    }
+
+    .slot-grid-body {
+        display: grid;
+        grid-template-columns: 80px repeat(7, 1fr);
+    }
+
+    /* Time Label - only show on hour marks */
+    .slot-time-label {
+        padding: 0 12px 0 0;
+        font-size: 12px;
+        font-weight: 400;
+        color: var(--text-muted);
+        border-right: 1px solid var(--border-default);
+        display: flex;
+        align-items: flex-start;
+        justify-content: flex-end;
+        height: 15px; /* 1/4 of hour block */
+        background: var(--bg-primary);
+        line-height: 1;
+    }
+    .slot-time-label.hour-mark {
+        color: var(--text-secondary);
+        position: relative;
+        top: -6px;
+    }
+    .slot-time-label.no-label {
+        color: transparent;
+    }
+
+    /* Each 15-min cell */
+    .slot-cell {
+        position: relative;
+        height: 15px;
+        border-right: 1px solid var(--border-default);
+        background: var(--bg-primary);
+        transition: background-color 0.1s ease;
+    }
+    .slot-cell:nth-child(8n) { border-right: none; } /* 8th column = last in 8-col grid */
+
+    /* Hour boundary lines */
+    .slot-cell.hour-top {
+        border-top: 1px solid var(--border-default);
+    }
+    .slot-cell.half-hour {
+        border-top: 1px dashed var(--border-subtle);
+    }
+
+    /* Past / disabled slots */
+    .slot-cell.past {
+        background: var(--bg-inset);
+        cursor: not-allowed;
+    }
+    .slot-cell.past::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: repeating-linear-gradient(
+            -45deg,
+            transparent,
+            transparent 3px,
+            var(--border-subtle) 3px,
+            var(--border-subtle) 4px
+        );
+        opacity: 0.4;
+        pointer-events: none;
+    }
+
+    /* Checkbox interaction */
+    .slot-cell input[type="checkbox"] {
+        position: absolute;
+        opacity: 0;
+        width: 100%;
+        height: 100%;
+        top: 0;
+        left: 0;
+        cursor: pointer;
+        z-index: 2;
+        margin: 0;
+    }
+    .slot-cell.past input[type="checkbox"] {
+        pointer-events: none;
+        cursor: not-allowed;
+    }
+
+    .slot-cell:not(.past):hover {
+        background: var(--bg-surface-hover);
+    }
+
+    .slot-cell input[type="checkbox"]:checked ~ .slot-fill {
+        display: block;
+    }
+
+    .slot-fill {
+        display: none;
+        position: absolute;
+        inset: 0;
+        background: var(--accent-green-subtle);
+        border-left: 3px solid var(--accent-green);
+        pointer-events: none;
+        z-index: 1;
+    }
+
+    /* Cancel cross on hover */
+    .slot-cell input[type="checkbox"]:checked ~ .slot-cancel {
+        display: none;
+    }
+    .slot-cell:hover input[type="checkbox"]:checked ~ .slot-cancel {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .slot-cancel {
+        display: none;
+        position: absolute;
+        top: 0;
+        right: 2px;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: var(--accent-red);
+        color: #fff;
+        font-size: 8px;
+        font-weight: 700;
+        z-index: 3;
+        pointer-events: none;
+        line-height: 1;
+    }
+
+    /* Legend */
+    .slot-legend {
+        display: flex;
+        gap: 24px;
+        padding: 10px 16px;
+        border-top: 1px solid var(--border-default);
+        font-size: 11px;
+        color: var(--text-secondary);
+        flex-shrink: 0;
+    }
+    .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .legend-swatch {
+        width: 14px;
+        height: 14px;
+        border-radius: 3px;
+        border: 1px solid var(--border-default);
+    }
+    .legend-swatch.available {
+        background: var(--accent-green-subtle);
+        border-left: 3px solid var(--accent-green);
+    }
+    .legend-swatch.free {
+        background: var(--bg-primary);
+    }
+    .legend-swatch.past-swatch {
+        background: var(--bg-inset);
+    }
+</style>
+
+<!-- Week Navigation -->
+<div class="week-nav anim-1">
+    <span class="week-nav-label">{{ week_label }}</span>
+    <div class="week-nav-right">
+        <a href="/slots?week_offset=0" class="week-nav-today">Aujourd'hui</a>
+        <a href="/slots?week_offset={{ prev_offset }}" class="week-nav-arrow">
+            <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+        </a>
+        <a href="/slots?week_offset={{ next_offset }}" class="week-nav-arrow">
+            <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg>
+        </a>
+    </div>
+</div>
+
+<!-- Slot Grid -->
+<div class="slot-container anim-2">
+
+    <!-- Header -->
+    <div class="slot-header-row">
+        <div class="slot-corner"></div>
+        {% for day in days %}
+            <div class="slot-day-header {% if day.is_today %}is-today{% endif %}">
+                {{ day.name }} {{ day.month }}/{{ day.date }}
+            </div>
+        {% endfor %}
+    </div>
+
+    <!-- Scrollable Grid -->
+    <div class="slot-scroll-body">
+        <div class="slot-grid-body">
+            {% for hour in range(8, 17) %}
+                {% for quarter in range(4) %}
+                    {% set minutes = quarter * 15 %}
+                    {% set time_str = "%02d:%02d"|format(hour, minutes) %}
+                    {% set is_hour = (minutes == 0) %}
+                    {% set is_half = (minutes == 30) %}
+
+                    <!-- Time Label Column -->
+                    <div class="slot-time-label {% if is_hour %}hour-mark{% else %}no-label{% endif %}">
+                        {% if is_hour %}{{ hour }}:00{% endif %}
+                    </div>
+
+                    <!-- 7 day columns -->
+                    {% for day in days %}
+                        {% set is_past_day = day.is_past %}
+                        {% set is_today_past = day.is_today and (hour < current_hour or (hour == current_hour and minutes <= current_minute)) %}
+                        {% set is_weekend = day.key in ['sam', 'dim'] %}
+                        {% set is_lunch = hour == 12 %}
+                        {% set cell_past = is_past_day or is_today_past or is_weekend or is_lunch %}
+
+                        <!-- Calculate end time for tooltip -->
+                        {% set end_min = minutes + 15 %}
+                        {% set end_hour = hour %}
+                        {% if end_min == 60 %}
+                            {% set end_min = 0 %}
+                            {% set end_hour = hour + 1 %}
+                        {% endif %}
+                        {% set end_time_str = "%02d:%02d"|format(end_hour, end_min) %}
+                        {% set tooltip = day.name ~ " " ~ time_str ~ " - " ~ end_time_str %}
+
+                        <div class="slot-cell {% if is_hour %}hour-top{% endif %} {% if is_half %}half-hour{% endif %} {% if cell_past %}past{% endif %}">
+                            <input type="checkbox" name="slot" value="{{ day.key }}_{{ time_str }}" {% if cell_past %}disabled{% endif %} title="{{ tooltip }}">
+                            <div class="slot-fill"></div>
+                            <div class="slot-cancel" title="Retirer">✕</div>
+                        </div>
+                    {% endfor %}
+
+                {% endfor %}
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Legend -->
+    <div class="slot-legend">
+        <div class="legend-item">
+            <div class="legend-swatch available"></div>
+            Créneau disponible
+        </div>
+        <div class="legend-item">
+            <div class="legend-swatch free"></div>
+            Libre
+        </div>
+        <div class="legend-item">
+            <div class="legend-swatch past-swatch"></div>
+            Passé
+        </div>
+    </div>
+
+</div>
+{% endblock %}
