@@ -1,14 +1,10 @@
-import logging
-
 from fastapi import Depends, FastAPI
-from sqlalchemy import text
 from sqlalchemy.orm import Session
-
-logger = logging.getLogger("core-api")
 
 from app.database import get_db
 from app.routers import core as core_router
 from app.routers import users as users_router
+from app.services.health import perform_health_check
 
 tags_metadata = [
     {
@@ -68,22 +64,6 @@ app = FastAPI(
 )
 app.include_router(core_router.router, prefix="/api/v1")
 app.include_router(users_router.router, prefix="/api/v1")
-
-
-def perform_health_check(db: Session) -> dict:
-    """Exécute la vérification de la base de données."""
-    try:
-        db.execute(text("SELECT 1"))
-        db_status = "connected"
-    except Exception as e:
-        logger.error("Health check DB failed: %s", e)
-        db_status = "unreachable"
-
-    return {
-        "status": "ok",
-        "service": "core-api",
-        "database": db_status
-    }
 
 
 @app.get(

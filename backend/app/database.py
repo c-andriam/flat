@@ -7,7 +7,9 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 POSTGRES_USER = os.environ["POSTGRES_USER"]
 POSTGRES_PASSWORD = quote_plus(os.environ["POSTGRES_PASSWORD"])
 POSTGRES_DB = os.environ["POSTGRES_DB"]
-POSTGRES_HOST = os.getenv("POSTGRES_HOST", "postgres")
+# Pas de défaut "postgres" : ce projet utilise Supabase (hôte distant),
+# POSTGRES_HOST doit toujours être fourni explicitement via .env.
+POSTGRES_HOST = os.environ["POSTGRES_HOST"]
 POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
 
 SQLALCHEMY_DATABASE_URL = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"

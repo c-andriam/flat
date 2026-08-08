@@ -1,4 +1,5 @@
 import secrets
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
@@ -91,7 +92,6 @@ def callback(code: str, db: Session = Depends(get_db)):
         user.email = email
         user.display_name = display_name
 
-    from datetime import datetime, timezone
     user.last_login_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(user)

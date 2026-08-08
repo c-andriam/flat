@@ -114,3 +114,45 @@ def test_delete_action(api, test_project):
     resp = api.delete(f"/actions/{created['id']}")
     assert resp.status_code == 204
     assert api.get(f"/actions/{created['id']}").status_code == 404
+
+
+def test_create_action_progress_out_of_bounds_rejected(api, test_project):
+    resp = api.post("/actions", json=_valid_action_payload(test_project["id"], progress=150.0))
+    assert resp.status_code == 422
+
+    resp = api.post("/actions", json=_valid_action_payload(test_project["id"], progress=-10.0))
+    assert resp.status_code == 422
+
+
+def test_update_action_progress_out_of_bounds_rejected(api, test_project):
+    created = api.post("/actions", json=_valid_action_payload(test_project["id"])).json()
+    resp = api.patch(f"/actions/{created['id']}", json={"progress": 101.0})
+    assert resp.status_code == 422
+
+
+def test_update_action_phase_regenerates_numero(api, test_project_with_phases):
+    created = api.post("/actions", json=_valid_action_payload(
+        test_project_with_phases["id"], phase="01"
+    )).json()
+    assert "-01-" in created["numero"]
+
+    resp = api.patch(f"/actions/{created['id']}", json={"phase": "02"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["phase"] == "02"
+    assert "-02-" in body["numero"]
+    assert "-01-" not in body["numero"]
+
+
+def test_update_action_phase_forbidden_on_non_phased_project(api, test_project):
+    created = api.post("/actions", json=_valid_action_payload(test_project["id"])).json()
+    resp = api.patch(f"/actions/{created['id']}", json={"phase": "01"})
+    assert resp.status_code == 422
+
+
+def test_update_action_phase_required_on_phased_project(api, test_project_with_phases):
+    created = api.post("/actions", json=_valid_action_payload(
+        test_project_with_phases["id"], phase="01"
+    )).json()
+    resp = api.patch(f"/actions/{created['id']}", json={"phase": None})
+    assert resp.status_code == 422

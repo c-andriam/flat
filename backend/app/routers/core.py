@@ -3,7 +3,6 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from app.database import get_db
 from app.models.project import (
@@ -22,10 +21,13 @@ from app.schemas.project_schema import (
     ProjectOut,
     ProjectUpdate,
     ProjectWithActionsOut,
+    RelanceLogOut,
     ResponsableCreate,
     ResponsableOut,
     ResponsableUpdate,
+    SyncLogOut,
 )
+from app.services.health import perform_health_check
 
 router = APIRouter(tags=["core"])
 
@@ -302,6 +304,27 @@ def update_action(action_id: uuid.UUID, payload: ActionUpdate, db: Session = Dep
         except ValueError:
             raise HTTPException(status_code=422, detail=f"Statut invalide: {update_data['status']}")
 
+    # Changer la phase doit rester cohérent avec has_phases du projet, et
+    # regénérer numero (qui encode la phase, ex: P01-01-05) pour éviter
+    # qu'il reste désynchronisé de la vraie phase de l'action.
+    if "phase" in update_data:
+        project = action.project
+        new_phase = update_data["phase"]
+
+        if project.has_phases and not new_phase:
+            raise HTTPException(
+                status_code=422,
+                detail="Ce projet utilise les phases (has_phases=True) : le champ 'phase' est obligatoire.",
+            )
+        if not project.has_phases and new_phase:
+            raise HTTPException(
+                status_code=422,
+                detail="Ce projet n'utilise pas les phases (has_phases=False) : le champ 'phase' doit rester vide.",
+            )
+
+        if new_phase != action.phase:
+            update_data["numero"] = _generate_numero(db, project, new_phase)
+
     for field, value in update_data.items():
         setattr(action, field, value)
 
@@ -445,6 +468,7 @@ def delete_responsable(responsable_id: uuid.UUID, db: Session = Depends(get_db))
 
 @router.get(
     "/sync-logs",
+    response_model=list[SyncLogOut],
     tags=["logs"],
     summary="Historique des synchronisations Excel",
     description="Les 50 dernières synchronisations d'import Excel, les plus récentes en premier. Lecture seule.",
@@ -467,6 +491,7 @@ def list_sync_logs(db: Session = Depends(get_db)):
 
 @router.get(
     "/relance-logs",
+    response_model=list[RelanceLogOut],
     tags=["logs"],
     summary="Historique des relances email",
     description="Les 50 derniers envois de relance aux responsables, les plus récents en premier. Lecture seule.",
@@ -495,14 +520,4 @@ def list_relance_logs(db: Session = Depends(get_db)):
     description="Endpoint de health check accessible sur /api/v1/health.",
 )
 def health_check_v1(db: Session = Depends(get_db)):
-    try:
-        db.execute(text("SELECT 1"))
-        db_status = "connected"
-    except Exception:
-        db_status = "unreachable"
-
-    return {
-        "status": "ok",
-        "service": "core-api",
-        "database": db_status
-    }
+    return perform_health_check(db)

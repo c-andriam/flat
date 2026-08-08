@@ -31,7 +31,7 @@ class ResponsableOut(ResponsableBase):
 class ActionBase(BaseModel):
     description: str
     resp_suivi: str | None = None
-    progress: float = 0.0
+    progress: float = Field(0.0, ge=0.0, le=100.0)
     spi: float = 0.0
     otd: float = 0.0
     deadline: date | None = None
@@ -54,7 +54,7 @@ class ActionCreate(ActionBase):
 class ActionUpdate(BaseModel):
     description: str | None = None
     resp_suivi: str | None = None
-    progress: float | None = None
+    progress: float | None = Field(None, ge=0.0, le=100.0)
     spi: float | None = None
     otd: float | None = None
     deadline: date | None = None
@@ -109,3 +109,21 @@ class ProjectOut(ProjectBase):
 
 class ProjectWithActionsOut(ProjectOut):
     actions: list[ActionOut] = []
+
+
+# --- Logs (lecture seule) ---
+
+class SyncLogOut(BaseModel):
+    id: uuid.UUID
+    started_at: datetime
+    finished_at: datetime | None = None
+    status: str
+    files_processed: int
+    error_message: str | None = None
+
+
+class RelanceLogOut(BaseModel):
+    id: uuid.UUID
+    responsable_id: uuid.UUID
+    sent_at: datetime
+    email_status: str
