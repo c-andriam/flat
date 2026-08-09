@@ -33,6 +33,12 @@ def get_calendar_grid(year: int, month: int):
     grid = []
     weeks = cal.monthdatescalendar(year, month)
     
+    # Force exactly 6 weeks (42 days) for stable UI height
+    while len(weeks) < 6:
+        last_day = weeks[-1][-1]
+        next_week = [last_day + timedelta(days=i) for i in range(1, 8)]
+        weeks.append(next_week)
+    
     for week in weeks:
         week_data = []
         for d in week:

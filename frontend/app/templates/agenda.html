@@ -12,9 +12,9 @@
     }
     @media (max-width: 1024px) {
         .agenda-layout { flex-direction: column; height: auto; }
+        .agenda-side-panel { width: 100% !important; }
     }
 
-    /* ─── Google Calendar Style ─── */
     .calendar-container {
         flex: 1;
         display: flex;
@@ -23,7 +23,8 @@
         border: 1px solid var(--border-default);
         border-radius: 8px;
         height: 100%;
-        overflow: hidden;
+        overflow-x: auto;
+        overflow-y: hidden;
     }
 
     .calendar-header {
@@ -76,8 +77,9 @@
 
     .calendar-grid-header {
         display: grid;
-        grid-template-columns: repeat(7, 1fr);
+        grid-template-columns: repeat(7, minmax(0, 1fr));
         border-bottom: 1px solid var(--border-default);
+        min-width: 600px; /* Force minimum width to prevent squishing */
     }
     .calendar-day-name {
         padding: 12px 0 4px;
@@ -92,9 +94,10 @@
 
     .calendar-grid-body {
         display: grid;
-        grid-template-columns: repeat(7, 1fr);
+        grid-template-columns: repeat(7, minmax(0, 1fr));
         grid-auto-rows: 1fr;
         flex: 1; /* Stretch to fill */
+        min-width: 600px;
     }
     .calendar-cell {
         border-right: 1px solid var(--border-default);
@@ -103,7 +106,7 @@
         display: flex;
         flex-direction: column;
         align-items: center; 
-        min-height: 0;
+        min-height: 80px; /* Force uniform height on mobile/desktop when auto-height is used */
         overflow: hidden;
     }
     .calendar-cell:nth-child(7n) { border-right: none; }

@@ -18,6 +18,10 @@
         text-align: center;
         letter-spacing: -0.01em;
     }
+    @media (max-width: 600px) {
+        .week-nav { flex-direction: column; gap: 12px; }
+        .week-nav-label { font-size: 18px; min-width: auto; }
+    }
     .week-nav-right {
         display: flex;
         align-items: center;
@@ -55,12 +59,12 @@
         color: var(--text-primary);
     }
 
-    /* Slot Container */
     .slot-container {
         background: var(--bg-primary);
         border: 1px solid var(--border-default);
         border-radius: 8px;
-        overflow: hidden;
+        overflow-x: auto;
+        overflow-y: hidden;
         display: flex;
         flex-direction: column;
     }
@@ -68,9 +72,10 @@
     /* Sticky Day Header */
     .slot-header-row {
         display: grid;
-        grid-template-columns: 80px repeat(7, 1fr);
+        grid-template-columns: 80px repeat(7, minmax(0, 1fr));
         border-bottom: 2px solid var(--border-default);
         flex-shrink: 0;
+        min-width: 640px; /* Force minimum width to prevent squishing */
     }
     .slot-corner {
         border-right: 1px solid var(--border-default);
@@ -93,13 +98,16 @@
     /* Scrollable Body */
     .slot-scroll-body {
         overflow-y: auto;
+        overflow-x: hidden; /* Prevent internal horizontal scroll */
         max-height: calc(100vh - 280px);
         padding-top: 8px; /* Ensure first hour label is not clipped */
+        min-width: 640px; /* Match header width to force parent scrollbar */
     }
 
     .slot-grid-body {
         display: grid;
-        grid-template-columns: 80px repeat(7, 1fr);
+        grid-template-columns: 80px repeat(7, minmax(0, 1fr));
+        min-width: 640px;
     }
 
     /* Time Label - only show on hour marks */

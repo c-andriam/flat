@@ -167,16 +167,35 @@
             transition: border-color 0.25s ease;
         }
 
+        /* ─── SPA Loader ─── */
+        .spa-loader {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+            background: var(--accent-blue);
+            z-index: 9999;
+            transform: scaleX(0);
+            transform-origin: left;
+            transition: transform 0.2s ease, opacity 0.2s ease;
+            pointer-events: none;
+            opacity: 0;
+        }
+        body.htmx-request .spa-loader {
+            opacity: 1;
+            transform: scaleX(0.7); /* Jump to 70% while loading */
+            transition: transform 3s cubic-bezier(0.1, 0.5, 0.2, 1), opacity 0.2s ease;
+        }
+
         /* ─── Animations ─── */
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
             to   { opacity: 1; transform: translateY(0); }
         }
 
-        .anim-1 { animation: fadeInUp 0.6s cubic-bezier(0.16,1,0.3,1) forwards; }
-        .anim-2 { animation: fadeInUp 0.6s cubic-bezier(0.16,1,0.3,1) 0.08s forwards; opacity: 0; }
-        .anim-3 { animation: fadeInUp 0.6s cubic-bezier(0.16,1,0.3,1) 0.16s forwards; opacity: 0; }
-        .anim-4 { animation: fadeInUp 0.6s cubic-bezier(0.16,1,0.3,1) 0.28s forwards; opacity: 0; }
+        .anim-1 { animation: fadeInUp 0.4s cubic-bezier(0.16,1,0.3,1) forwards; }
+        .anim-2 { animation: fadeInUp 0.4s cubic-bezier(0.16,1,0.3,1) 0.05s forwards; opacity: 0; }
+        .anim-3 { animation: fadeInUp 0.4s cubic-bezier(0.16,1,0.3,1) 0.1s forwards; opacity: 0; }
+        .anim-4 { animation: fadeInUp 0.4s cubic-bezier(0.16,1,0.3,1) 0.15s forwards; opacity: 0; }
 
         /* ─── Buttons ─── */
         .btn {
@@ -283,7 +302,9 @@
         }
     </script>
 </head>
-<body>
+<body hx-boost="true">
+
+    <div class="spa-loader"></div>
 
     <!-- Header -->
     <header class="app-header">
