@@ -127,3 +127,60 @@ async def read_slots(request: Request, week_offset: int = 0):
         "today_iso": today.isoformat(),
     }
     return templates.TemplateResponse(request=request, name="slots.html", context=context)
+
+
+# ─── Toast API ───
+
+@app.get("/api/toast", response_class=HTMLResponse)
+async def api_toast(request: Request, message: str = "", type: str = "info"):
+    """Renders a toast fragment. Called by the JS showToast listener via htmx.ajax()."""
+    if not message:
+        return HTMLResponse("")
+    return templates.TemplateResponse(
+        request=request,
+        name="fragments/toast_fragment.html",
+        context={"message": message, "type": type}
+    )
+
+@app.get("/api/toast/dismiss", response_class=HTMLResponse)
+async def api_toast_dismiss():
+    """Returns empty string to remove a toast via hx-swap='outerHTML'."""
+    return HTMLResponse("")
+
+@app.post("/api/test-toast")
+async def api_test_toast(type: str = "info"):
+    """Test endpoint that triggers a toast notification via HX-Trigger header."""
+    import json
+    from fastapi.responses import Response
+    msg_map = {
+        "success": "L'action a été enregistrée avec succès.",
+        "error": "Impossible de contacter le serveur de base de données.",
+        "warning": "La session expirera dans 5 minutes.",
+        "info": "Une nouvelle version de l'application est disponible."
+    }
+    msg = msg_map.get(type, "Information système.")
+    
+    headers = {
+        "HX-Trigger": json.dumps({
+            "showToast": {"message": msg, "type": type}
+        })
+    }
+    return Response(status_code=204, headers=headers)
+
+
+# ─── Modal API ───
+
+@app.get("/api/modal/close", response_class=HTMLResponse)
+async def api_modal_close():
+    """Returns empty string to clear #modal-root via hx-swap='innerHTML'."""
+    return HTMLResponse("")
+
+@app.get("/api/modal/new-action", response_class=HTMLResponse)
+async def api_modal_new_action(request: Request):
+    """Renders the 'Nouvelle Action' modal fragment."""
+    return templates.TemplateResponse(
+        request=request,
+        name="fragments/modal_new_action.html",
+        context={}
+    )
+

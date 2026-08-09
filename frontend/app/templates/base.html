@@ -303,6 +303,207 @@
             margin: 48px 0;
             transition: background-color 0.25s ease;
         }
+
+        /* ─── Toast System ─── */
+        #toast-container {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            z-index: 9000;
+            display: flex;
+            flex-direction: column-reverse;
+            gap: 8px;
+            pointer-events: none;
+            max-width: 400px;
+        }
+        @media (max-width: 480px) {
+            #toast-container {
+                left: 16px;
+                right: 16px;
+                bottom: 16px;
+                max-width: none;
+            }
+        }
+
+        @keyframes toastIn {
+            from { opacity: 0; transform: translateY(8px) scale(0.98); }
+            to   { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        @keyframes toastOut {
+            from { opacity: 1; transform: translateY(0) scale(1); }
+            to   { opacity: 0; transform: translateY(8px) scale(0.96); }
+        }
+
+        .toast {
+            pointer-events: auto;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 12px 14px;
+            border-radius: 8px;
+            border: 1px solid var(--border-default);
+            background: var(--bg-surface);
+            box-shadow: var(--shadow-md);
+            animation: toastIn 0.25s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+            transition: background-color 0.25s ease;
+        }
+        .toast.htmx-swapping {
+            animation: toastOut 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+        }
+
+        .toast__icon {
+            flex-shrink: 0;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-top: 1px;
+        }
+        .toast__message {
+            flex: 1;
+            font-size: 13px;
+            font-weight: 500;
+            line-height: 1.45;
+            color: var(--text-primary);
+        }
+        .toast__close {
+            flex-shrink: 0;
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 2px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: color 0.15s ease, background 0.15s ease;
+        }
+        .toast__close:hover {
+            color: var(--text-primary);
+            background: var(--bg-surface-hover);
+        }
+
+        /* Toast color variants */
+        .toast--success { border-left: 3px solid var(--accent-green); }
+        .toast--success .toast__icon { color: var(--accent-green); }
+
+        .toast--error { border-left: 3px solid var(--accent-red); }
+        .toast--error .toast__icon { color: var(--accent-red); }
+
+        .toast--warning { border-left: 3px solid var(--accent-orange); }
+        .toast--warning .toast__icon { color: var(--accent-orange); }
+
+        .toast--info { border-left: 3px solid var(--accent-blue); }
+        .toast--info .toast__icon { color: var(--accent-blue); }
+
+        /* ─── Modal System ─── */
+        #modal-root {
+            position: fixed;
+            inset: 0;
+            z-index: 8000;
+            pointer-events: none;
+        }
+        #modal-root:empty {
+            display: none;
+        }
+        #modal-root:not(:empty) {
+            pointer-events: auto;
+        }
+
+        @keyframes backdropIn {
+            from { opacity: 0; }
+            to   { opacity: 1; }
+        }
+        @keyframes dialogIn {
+            from { opacity: 0; transform: translate(-50%, -50%) scale(0.97) translateY(6px); }
+            to   { opacity: 1; transform: translate(-50%, -50%) scale(1) translateY(0); }
+        }
+
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.5);
+            animation: backdropIn 0.2s ease forwards;
+            cursor: pointer;
+        }
+        html.dark .modal-backdrop {
+            background: rgba(0, 0, 0, 0.65);
+        }
+
+        .modal-dialog {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 90%;
+            max-width: 520px;
+            max-height: 85vh;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-default);
+            border-radius: 12px;
+            box-shadow: var(--shadow-lg);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            animation: dialogIn 0.25s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+        }
+
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-default);
+            flex-shrink: 0;
+        }
+        .modal-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-primary);
+            letter-spacing: -0.01em;
+        }
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: color 0.15s ease, background 0.15s ease;
+        }
+        .modal-close:hover {
+            color: var(--text-primary);
+            background: var(--bg-surface-hover);
+        }
+
+        .modal-body {
+            padding: 20px;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            padding: 14px 20px;
+            border-top: 1px solid var(--border-default);
+            flex-shrink: 0;
+        }
+        .modal-footer .btn {
+            padding: 8px 16px;
+            font-size: 13px;
+        }
+
+        /* Body scroll lock when modal is open */
+        body.no-scroll {
+            overflow: hidden;
+        }
     </style>
 
     <script>
@@ -344,6 +545,53 @@
     <footer class="app-footer">
         &copy; 2026 DSI TRIMETA Group &middot; Direction des Systèmes d'Information
     </footer>
+
+    <!-- Toast Container (fixed bottom-right, stacks upward) -->
+    <div id="toast-container" aria-live="polite"></div>
+
+    <!-- Modal Root (fixed overlay, initially empty/hidden) -->
+    <div id="modal-root"></div>
+
+    <script>
+        /* ─── Toast Event Forwarding ─── 
+           JS justifié : htmx n'a aucun attribut déclaratif pour extraire 
+           event.detail et le mapper en query params d'une requête.
+           On écoute l'event custom "showToast" émis par HX-Trigger et on 
+           délègue à htmx.ajax() pour que le rendu reste 100% serveur. */
+        if (!window.__toastListenerBound) {
+            window.__toastListenerBound = true;
+            document.body.addEventListener('showToast', function(evt) {
+                var d = evt.detail || {};
+                var msg = encodeURIComponent(d.message || '');
+                var type = encodeURIComponent(d.type || 'info');
+                if (msg) {
+                    htmx.ajax('GET', '/api/toast?message=' + msg + '&type=' + type, {
+                        target: '#toast-container',
+                        swap: 'beforeend'
+                    });
+                }
+            });
+        }
+
+        /* ─── Modal Scroll Lock ───
+           JS justifié : aucun attribut htmx ne permet de manipuler le CSS 
+           d'un élément (body) extérieur à la cible du swap (#modal-root).
+           On écoute les swaps htmx ciblant #modal-root pour basculer 
+           la classe no-scroll sur body. */
+        if (!window.__modalScrollBound) {
+            window.__modalScrollBound = true;
+            var modalRoot = document.getElementById('modal-root');
+            if (modalRoot) {
+                new MutationObserver(function() {
+                    if (modalRoot.children.length > 0) {
+                        document.body.classList.add('no-scroll');
+                    } else {
+                        document.body.classList.remove('no-scroll');
+                    }
+                }).observe(modalRoot, { childList: true });
+            }
+        }
+    </script>
 
 </body>
 </html>

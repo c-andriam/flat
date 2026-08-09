@@ -1,0 +1,56 @@
+{#
+  MODAL MACRO — Fragment chargé via hx-get dans #modal-root.
+  
+  Utilisation :
+    {% call(content) modal("Titre", show_footer=true) %}
+      <p>Contenu de la modal</p>
+    {% endcall %}
+    
+  Fermeture : bouton ✕ (hx-get), backdrop (hx-get), Echap (htmx keydown trigger).
+#}
+
+{% macro modal(title="", show_footer=true) %}
+<div class="modal-backdrop"
+     hx-get="/api/modal/close"
+     hx-target="#modal-root"
+     hx-swap="innerHTML">
+</div>
+<div class="modal-dialog" role="dialog" aria-modal="true" aria-label="{{ title }}">
+    {# Escape key listener — 100% htmx, no JS needed.
+       This element only exists while the modal is open;
+       htmx removes it on close, stopping the listener automatically. #}
+    <div style="display:none"
+         hx-get="/api/modal/close"
+         hx-target="#modal-root"
+         hx-swap="innerHTML"
+         hx-trigger="keydown[key=='Escape'] from:body">
+    </div>
+
+    <div class="modal-header">
+        <h3 class="modal-title">{{ title }}</h3>
+        <button class="modal-close"
+                hx-get="/api/modal/close"
+                hx-target="#modal-root"
+                hx-swap="innerHTML"
+                aria-label="Fermer">
+            <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+    </div>
+    <div class="modal-body">
+        {{ caller() }}
+    </div>
+    {% if show_footer %}
+    <div class="modal-footer">
+        <button class="btn btn-secondary"
+                hx-get="/api/modal/close"
+                hx-target="#modal-root"
+                hx-swap="innerHTML">
+            Annuler
+        </button>
+        <button class="btn btn-primary">
+            Confirmer
+        </button>
+    </div>
+    {% endif %}
+</div>
+{% endmacro %}
