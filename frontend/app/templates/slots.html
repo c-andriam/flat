@@ -100,7 +100,6 @@
         overflow-y: auto;
         overflow-x: hidden; /* Prevent internal horizontal scroll */
         max-height: calc(100vh - 280px);
-        padding-top: 8px; /* Ensure first hour label is not clipped */
         min-width: 640px; /* Match header width to force parent scrollbar */
     }
 
@@ -127,7 +126,11 @@
     .slot-time-label.hour-mark {
         color: var(--text-secondary);
         position: relative;
-        top: -6px;
+        top: 0px;
+    }
+    /* First hour (8:00) needs extra top margin to not touch header */
+    .slot-grid-body .slot-time-label.hour-mark:first-child {
+        padding-top: 4px;
     }
     .slot-time-label.no-label {
         color: transparent;
