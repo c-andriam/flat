@@ -1,0 +1,22 @@
+{# 
+  SKELETON LOADER MACRO
+  Variant: 'stat', 'row', 'card'
+#}
+{% macro skeleton(variant="row") %}
+<div class="skeleton skeleton--{{ variant }} htmx-indicator">
+    {% if variant == 'stat' %}
+    <div class="sk-text" style="width: 60px; height: 32px; border-radius: 4px;"></div>
+    {% elif variant == 'card' %}
+    <div class="sk-text" style="width: 50%; height: 16px; margin-bottom: 12px; border-radius: 4px;"></div>
+    <div class="sk-text" style="width: 30%; height: 32px; border-radius: 4px;"></div>
+    {% elif variant == 'row' %}
+    <div style="display: flex; gap: 16px; align-items: center; padding: 12px 0;">
+        <div class="sk-text" style="width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0;"></div>
+        <div style="flex: 1; display: flex; flex-direction: column; gap: 8px;">
+            <div class="sk-text" style="width: 30%; height: 14px; border-radius: 4px;"></div>
+            <div class="sk-text" style="width: 60%; height: 12px; border-radius: 4px;"></div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endmacro %}

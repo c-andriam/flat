@@ -1,6 +1,11 @@
 {% extends "dashboard_base.html" %}
 
+{% from "macros/breadcrumb.html" import breadcrumb %}
+{% from "macros/empty_state.html" import empty_state %}
+
 {% block dashboard_content %}
+{{ breadcrumb([{"label": "Vue d'ensemble", "url": "/dashboard"}, {"label": "Rapports"}]) }}
+
 <div class="page-header anim-2">
     <h2 class="page-title">Rapports</h2>
     <button class="btn btn-primary" style="padding: 6px 12px; font-size: 13px;">
@@ -9,10 +14,11 @@
     </button>
 </div>
 
-<div class="anim-3">
-    <div class="empty-state" style="margin-top: 24px;">
-        <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" style="width: 48px; height: 48px; margin: 0 auto 12px; color: var(--border-default);"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>
-        <p>Aucune donnée disponible pour générer un rapport.</p>
-    </div>
+<div class="anim-3" style="margin-top: 24px;">
+    {{ empty_state(
+        icon='<svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" style="width: 48px; height: 48px;"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>',
+        title='Aucun rapport disponible',
+        message='Aucune donnée suffisante n\'est disponible pour générer un rapport actuellement.'
+    ) }}
 </div>
 {% endblock %}

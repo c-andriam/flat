@@ -214,6 +214,11 @@
     }
 </style>
 
+{% from "macros/breadcrumb.html" import breadcrumb %}
+{% from "macros/empty_state.html" import empty_state %}
+
+{{ breadcrumb([{"label": "Vue d'ensemble", "url": "/dashboard"}, {"label": "Agenda"}]) }}
+
 <div class="page-header anim-1">
     <h2 class="page-title">Agenda</h2>
     <button class="btn btn-primary" style="padding: 6px 16px; font-size: 14px; border-radius: 24px;">

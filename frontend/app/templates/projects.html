@@ -1,6 +1,11 @@
 {% extends "dashboard_base.html" %}
 
+{% from "macros/breadcrumb.html" import breadcrumb %}
+{% from "macros/empty_state.html" import empty_state %}
+
 {% block dashboard_content %}
+{{ breadcrumb([{"label": "Vue d'ensemble", "url": "/dashboard"}, {"label": "Projets"}]) }}
+
 <div class="page-header anim-2">
     <h2 class="page-title">Projets</h2>
     <button class="btn btn-primary" style="padding: 6px 12px; font-size: 13px;">
@@ -9,10 +14,11 @@
     </button>
 </div>
 
-<div class="anim-3">
-    <div class="empty-state" style="margin-top: 24px;">
-        <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" style="width: 48px; height: 48px; margin: 0 auto 12px; color: var(--border-default);"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-        <p>La liste des projets est vide pour le moment.</p>
-    </div>
+<div class="anim-3" style="margin-top: 24px;">
+    {{ empty_state(
+        icon='<svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" style="width: 48px; height: 48px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
+        title='Aucun projet trouvé',
+        message='Commencez par créer un nouveau projet pour centraliser vos données.'
+    ) }}
 </div>
 {% endblock %}
