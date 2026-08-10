@@ -91,48 +91,58 @@ def parse_excel_file(
         raise FileNotFoundError(f"Fichier introuvable : {path}")
     if not path.suffix.lower() in (".xlsx", ".xlsm"):
         raise ValueError(f"Format non supporté : {path.suffix} (attendu .xlsx ou .xlsm)")
+    try:
+        wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
+    except Exception as exc:
+        raise ValueError(f"Impossible de lire le fichier Excel {path.name}: {exc}") from exc
 
-    wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
-    ws = wb[sheet_name] if sheet_name else wb.active
+    try:
+        if sheet_name is not None:
+            if sheet_name not in wb.sheetnames:
+                raise ValueError(f"Feuille introuvable: {sheet_name}")
+            ws = wb[sheet_name]
+        else:
+            ws = wb.active
 
-    actions = []
-    skipped = 0
+        actions = []
+        skipped = 0
 
-    for row in ws.iter_rows(min_row=data_start_row, values_only=False):
-        # Colonnes B(1) à L(11) — index 0-based dans la ligne
-        cells = {cell.column_letter: cell.value for cell in row}
+        for row in ws.iter_rows(min_row=data_start_row, values_only=False):
+            # Colonnes B(1) à L(11) — index 0-based dans la ligne
+            cells = {cell.column_letter: cell.value for cell in row}
 
-        numero = str(cells.get("B", "") or "").strip()
-        description = str(cells.get("C", "") or "").strip()
+            numero = str(cells.get("B", "") or "").strip()
+            description = str(cells.get("C", "") or "").strip()
 
-        # Ignorer les lignes vides (pas de numéro ni de description)
-        if not numero and not description:
-            skipped += 1
-            continue
+            # Ignorer les lignes vides (pas de numéro ni de description)
+            if not numero and not description:
+                skipped += 1
+                continue
 
-        if not description:
-            logger.warning("Ligne %s ignorée : numéro '%s' sans description", row[0].row, numero)
-            skipped += 1
-            continue
+            if not description:
+                logger.warning("Ligne %s ignorée : numéro '%s' sans description", row[0].row, numero)
+                skipped += 1
+                continue
 
-        action = {
-            "numero": numero,
-            "description": description,
-            "responsable_names": _parse_responsables(cells.get("D")),
-            "resp_suivi": str(cells.get("E", "") or "").strip() or None,
-            "progress": _safe_float(cells.get("F")),
-            "spi": _safe_float(cells.get("G")),
-            "otd": _safe_float(cells.get("H")),
-            "deadline": _safe_date(cells.get("I")),
-            "date_realisation": _safe_date(cells.get("J")),
-            "charges_hj": _safe_float(cells.get("K"), default=None),
-            "commentaire": str(cells.get("L", "") or "").strip() or None,
-        }
-        actions.append(action)
+            action = {
+                "numero": numero,
+                "description": description,
+                "responsable_names": _parse_responsables(cells.get("D")),
+                "resp_suivi": str(cells.get("E", "") or "").strip() or None,
+                "progress": _safe_float(cells.get("F")),
+                "spi": _safe_float(cells.get("G")),
+                "otd": _safe_float(cells.get("H")),
+                "deadline": _safe_date(cells.get("I")),
+                "date_realisation": _safe_date(cells.get("J")),
+                "charges_hj": _safe_float(cells.get("K"), default=None),
+                "commentaire": str(cells.get("L", "") or "").strip() or None,
+            }
+            actions.append(action)
 
-    wb.close()
-    logger.info(
-        "Fichier '%s' parsé : %d actions extraites, %d lignes ignorées",
-        path.name, len(actions), skipped,
-    )
-    return actions
+        logger.info(
+            "Fichier '%s' parsé : %d actions extraites, %d lignes ignorées",
+            path.name, len(actions), skipped,
+        )
+        return actions
+    finally:
+        wb.close()

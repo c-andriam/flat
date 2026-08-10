@@ -134,8 +134,8 @@ async def create_project(payload: ProjectCreate, db: AsyncSession = Depends(get_
     responses={404: {"description": "Aucun projet avec cet identifiant."}},
 )
 async def update_project(
+    payload: ProjectUpdate,
     project_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du projet à modifier."),
-    payload: ProjectUpdate = None,
     db: AsyncSession = Depends(get_async_db)
 ):
     result = await db.execute(select(Project).filter(Project.id == project_id))
@@ -352,8 +352,8 @@ async def create_action(payload: ActionCreate, db: AsyncSession = Depends(get_as
     },
 )
 async def update_action(
+    payload: ActionUpdate,
     action_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) de l'action à modifier."),
-    payload: ActionUpdate = None,
     db: AsyncSession = Depends(get_async_db)
 ):
     result = await db.execute(
@@ -520,8 +520,8 @@ async def create_responsable(payload: ResponsableCreate, db: AsyncSession = Depe
     responses={404: {"description": "Aucun responsable avec cet identifiant."}},
 )
 async def update_responsable(
+    payload: ResponsableUpdate,
     responsable_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du responsable."),
-    payload: ResponsableUpdate = None,
     db: AsyncSession = Depends(get_async_db)
 ):
     result = await db.execute(select(Responsable).filter(Responsable.id == responsable_id))

@@ -45,7 +45,12 @@ def sync_project_file(self, project_id: str, file_path: str):
     db = SessionLocal()
     sync_log = SyncLog(status=SyncStatus.RUNNING)
     db.add(sync_log)
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.exception("Impossible de créer le SyncLog initial pour %s", project_id)
+        raise self.retry(exc=e, countdown=60)
 
     try:
         project = db.query(Project).filter(Project.id == project_id).first()
@@ -106,10 +111,15 @@ def sync_project_file(self, project_id: str, file_path: str):
         }
 
     except Exception as e:
-        sync_log.finished_at = datetime.now(timezone.utc)
-        sync_log.status = SyncStatus.FAILED
-        sync_log.error_message = str(e)[:500]
-        db.commit()
+        try:
+            db.rollback()
+            sync_log.finished_at = datetime.now(timezone.utc)
+            sync_log.status = SyncStatus.FAILED
+            sync_log.error_message = str(e)[:500]
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("Impossible d'enregistrer l'échec du SyncLog pour %s", project_id)
         logger.exception("Sync échouée pour le projet %s", project_id)
         raise self.retry(exc=e, countdown=60)
 

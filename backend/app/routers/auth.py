@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from fastapi.responses import RedirectResponse
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from slowapi import Limiter
@@ -91,6 +92,8 @@ async def callback(
         result = microsoft.acquire_token_by_code(code)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=502, detail="Erreur de communication avec Microsoft")
 
     claims = result.get("id_token_claims", {})
     azure_object_id = claims.get("oid")
@@ -110,7 +113,11 @@ async def callback(
         user.display_name = display_name
 
     user.last_login_at = datetime.now(timezone.utc)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Conflit lors de la synchronisation du compte utilisateur")
     await db.refresh(user)
 
     token = create_access_token(user)

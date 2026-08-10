@@ -69,8 +69,8 @@ async def get_user(
     },
 )
 async def update_user(
+    payload: UserUpdate,
     user_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du compte utilisateur à modifier."),
-    payload: UserUpdate = None,
     db: AsyncSession = Depends(get_async_db)
 ):
     """Un admin peut changer le rôle (RBAC) ou désactiver un compte."""

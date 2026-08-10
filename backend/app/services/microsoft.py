@@ -2,20 +2,28 @@ import os
 
 import msal
 
-AZURE_CLIENT_ID = os.environ["AZURE_CLIENT_ID"]
-AZURE_TENANT_ID = os.environ["AZURE_TENANT_ID"]
-AZURE_CLIENT_SECRET = os.environ["AZURE_CLIENT_SECRET"]
 AZURE_REDIRECT_URI = os.getenv("AZURE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/callback")
 
-AUTHORITY = f"https://login.microsoftonline.com/{AZURE_TENANT_ID}"
+
+def _required_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"Variable d'environnement manquante: {name}")
+    return value
+
 SCOPES = ["User.Read"]
 
 
 def _msal_app() -> msal.ConfidentialClientApplication:
+    azure_client_id = _required_env("AZURE_CLIENT_ID")
+    azure_tenant_id = _required_env("AZURE_TENANT_ID")
+    azure_client_secret = _required_env("AZURE_CLIENT_SECRET")
+    authority = f"https://login.microsoftonline.com/{azure_tenant_id}"
+
     return msal.ConfidentialClientApplication(
-        client_id=AZURE_CLIENT_ID,
-        client_credential=AZURE_CLIENT_SECRET,
-        authority=AUTHORITY,
+        client_id=azure_client_id,
+        client_credential=azure_client_secret,
+        authority=authority,
     )
 
 
