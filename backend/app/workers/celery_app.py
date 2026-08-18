@@ -45,16 +45,33 @@ app.conf.update(
     broker_connection_retry_on_startup=True,
 )
 
+# Les trois rappels sont espacés pour ne pas empiler trois messages dans la
+# même minute chez un responsable concerné par plusieurs natures — et parce
+# que la période de silence les rendrait de toute façon mutuellement
+# exclusifs s'ils partaient ensemble.
 app.conf.beat_schedule = {
-    "check-relances-quotidiennes": {
+    "marquer-actions-en-retard": {
+        "task": "app.workers.notifications.mark_overdue_actions",
+        # En premier, pour que les statuts soient à jour avant les relances.
+        "schedule": crontab(hour=7, minute=45),
+    },
+    "relance-actions-en-retard": {
         "task": "app.workers.notifications.check_and_send",
         # `schedule: 86400.0` déclenchait la tâche 24 h après le démarrage du
         # beat, donc à une heure qui dépendait du dernier redéploiement.
         "schedule": crontab(hour=8, minute=0),
+        "kwargs": {"kind": "overdue"},
     },
-    "marquer-actions-en-retard": {
-        "task": "app.workers.notifications.mark_overdue_actions",
-        # Juste avant les relances, pour que les statuts soient à jour.
-        "schedule": crontab(hour=7, minute=45),
+    "rappel-jour-j": {
+        "task": "app.workers.notifications.check_and_send",
+        "schedule": crontab(hour=8, minute=10),
+        "kwargs": {"kind": "today"},
+    },
+    "rappel-echeances-proches": {
+        "task": "app.workers.notifications.check_and_send",
+        # Une fois par semaine seulement : ce rappel est de l'anticipation,
+        # pas une alerte. Le lundi matin, avant la réunion de suivi.
+        "schedule": crontab(hour=8, minute=20, day_of_week="mon"),
+        "kwargs": {"kind": "due_soon"},
     },
 }

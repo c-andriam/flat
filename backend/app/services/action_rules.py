@@ -31,6 +31,13 @@ def compute_status(
 
     if progress >= 100.0:
         return ActionStatus.TERMINE
+    if current is ActionStatus.BLOQUE:
+        # `BLOQUE` est un constat humain — un blocage fournisseur, une
+        # validation qui n'arrive pas. Le laisser basculer en EN_RETARD ferait
+        # disparaître l'information la plus utile au pilotage : *pourquoi*
+        # l'action n'avance pas. Le retard reste visible par la date, que le
+        # filtre `overdue` calcule sur `deadline` et non sur le statut.
+        return ActionStatus.BLOQUE
     if deadline is not None and deadline <= today:
         return ActionStatus.EN_RETARD
     if current in (ActionStatus.EN_COURS, ActionStatus.A_FAIRE):

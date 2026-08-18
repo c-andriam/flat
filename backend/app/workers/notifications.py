@@ -1,123 +1,160 @@
 """
-Worker Celery pour les notifications et relances.
+Worker Celery des relances par email.
 
-Prépare des emails consolidés (via Outlook/Graph API) pour les actions en
-retard ou proches de l'échéance.
+Le worker construisait sa propre sélection d'actions et se contentait de
+journaliser « Notification générée » — rien ne partait, et sa définition du
+retard pouvait diverger de celle de l'API. Il s'appuie désormais sur les mêmes
+vues métier (`services/action_queries`), les mêmes gabarits
+(`services/email_templates`) et le même émetteur (`services/outlook`) que les
+routes `/relances` : un rappel quotidien et un aperçu déclenché à la main
+produisent exactement le même message.
 """
 
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models.project import Action, ActionStatus, Project, RelanceLog
+from app.models.project import Action, ActionStatus, RelanceLog, Responsable
+from app.services import outlook
+from app.services.action_queries import ActionView, build_actions_query, default_order
+from app.services.digests import to_digest
+from app.services.email_templates import RelanceKind, build_email
 from app.workers.celery_app import app
 
 logger = logging.getLogger("worker-notifications")
 
+_VUE_PAR_NATURE = {
+    RelanceKind.OVERDUE: ActionView.OVERDUE,
+    RelanceKind.TODAY: ActionView.TODAY,
+    RelanceKind.DUE_SOON: ActionView.DUE_SOON,
+}
 
-@app.task(name="app.workers.notifications.check_and_send")
-def check_and_send():
+
+def _responsables_notifiables(db) -> list[Responsable]:
+    """Responsables disposant d'une adresse email exploitable."""
+    return list(
+        db.execute(
+            select(Responsable)
+            .filter(Responsable.is_mapped.is_(True), Responsable.email.isnot(None))
+            .order_by(Responsable.display_name)
+        )
+        .scalars()
+        .all()
+    )
+
+
+def _en_periode_de_silence(db, responsable_id) -> bool:
+    """Le beat tourne chaque jour ; sans ce délai, un responsable recevrait un
+    rappel quotidien tant qu'une action reste ouverte."""
+    if settings.relance_cooldown_days <= 0:
+        return False
+    seuil = datetime.now(timezone.utc) - timedelta(days=settings.relance_cooldown_days)
+    derniere = db.execute(
+        select(func.max(RelanceLog.sent_at)).filter(
+            RelanceLog.responsable_id == responsable_id
+        )
+    ).scalar_one_or_none()
+    if derniere is None:
+        return False
+    if derniere.tzinfo is None:
+        derniere = derniere.replace(tzinfo=timezone.utc)
+    return derniere >= seuil
+
+
+@app.task(name="app.workers.notifications.check_and_send", bind=True, max_retries=2)
+def check_and_send(self, kind: str = RelanceKind.OVERDUE.value):
     """
     Tâche périodique (Celery Beat).
-    Vérifie les actions en retard ou proches de l'échéance (J-3 par défaut).
-    Génère un email consolidé pour chaque responsable concerné.
+
+    Args:
+        kind: `overdue`, `today` ou `due_soon` — détermine la sélection des
+            actions et le gabarit d'email utilisés.
     """
-    db = SessionLocal()
     try:
-        today = datetime.now(timezone.utc).date()
-        horizon = today + timedelta(days=settings.relance_horizon_days)
+        nature = RelanceKind(kind)
+    except ValueError:
+        raise ValueError(
+            f"Nature de relance inconnue : {kind!r} "
+            f"(attendu : {', '.join(k.value for k in RelanceKind)})"
+        )
 
-        # Filtrage en SQL. L'implémentation précédente chargeait *toutes* les
-        # actions non terminées de toute la base, puis écartait en Python
-        # celles sans échéance ou hors fenêtre : le coût grandissait avec
-        # l'historique, pas avec le nombre d'actions réellement à relancer.
-        actions = (
-            db.query(Action)
-            .join(Project, Action.project_id == Project.id)
-            .options(selectinload(Action.responsables))
-            .filter(
-                Action.status != ActionStatus.TERMINE,
-                Action.progress < 100.0,
-                Action.deadline.isnot(None),
-                Action.deadline <= horizon,
-                # Un projet archivé ne doit plus générer de relance.
-                Project.is_active.is_(True),
+    db = SessionLocal()
+    envoyes = simules = echecs = ignores = 0
+    try:
+        for responsable in _responsables_notifiables(db):
+            stmt = build_actions_query(
+                view=_VUE_PAR_NATURE[nature],
+                responsable_id=responsable.id,
+                active_projects_only=True,
+                due_soon_days=settings.relance_horizon_days,
             )
-            .all()
-        )
+            stmt = default_order(stmt).options(
+                selectinload(Action.responsables), selectinload(Action.project)
+            )
+            actions = list(db.execute(stmt).scalars().unique().all())
+            if not actions:
+                continue
 
-        if not actions:
-            logger.info("Aucune action à relancer aujourd'hui.")
-            return {"status": "success", "sent": 0, "skipped_cooldown": 0}
+            if _en_periode_de_silence(db, responsable.id):
+                ignores += 1
+                continue
 
-        # Date de dernière relance par responsable, pour ne pas réexpédier le
-        # même rappel tous les jours : le beat tourne quotidiennement, sans
-        # ce garde-fou chaque responsable recevait un mail par jour tant que
-        # l'action restait ouverte.
-        cooldown_start = datetime.now(timezone.utc) - timedelta(
-            days=settings.relance_cooldown_days
+            message = build_email(
+                nature,
+                responsable.display_name,
+                [to_digest(a) for a in actions],
+                app_url=f"{settings.frontend_url}/actions",
+            )
+            resultat = outlook.send_email(
+                to=responsable.email,
+                subject=message.subject,
+                html_body=message.html,
+                text_body=message.text,
+            )
+
+            if resultat.ok:
+                db.add(
+                    RelanceLog(
+                        responsable_id=responsable.id,
+                        action_ids=",".join(str(a.id) for a in actions),
+                        email_status=resultat.status.value,
+                    )
+                )
+                db.commit()
+                if resultat.status is outlook.SendStatus.SENT:
+                    envoyes += 1
+                else:
+                    simules += 1
+            else:
+                echecs += 1
+                logger.error(
+                    "Relance %s non envoyée à %s : %s",
+                    nature.value, responsable.email, resultat.detail,
+                )
+
+        logger.info(
+            "Relances %s terminées — %d envoyées, %d simulées, %d en échec, "
+            "%d en période de silence (mode : %s)",
+            nature.value, envoyes, simules, echecs, ignores, outlook.send_mode().value,
         )
-        recently_notified = {
-            resp_id
-            for (resp_id,) in db.query(RelanceLog.responsable_id)
-            .filter(RelanceLog.sent_at >= cooldown_start)
-            .distinct()
-            .all()
+        return {
+            "status": "success",
+            "kind": nature.value,
+            "mode": outlook.send_mode().value,
+            "sent": envoyes,
+            "simulated": simules,
+            "failed": echecs,
+            "skipped_cooldown": ignores,
         }
 
-        to_notify: dict = {}
-        for action in actions:
-            days_left = (action.deadline - today).days
-            for resp in action.responsables:
-                # On ne notifie que si on a un email mappé.
-                if not (resp.is_mapped and resp.email):
-                    continue
-                if resp.id in recently_notified:
-                    continue
-                entry = to_notify.setdefault(
-                    resp.id, {"responsable": resp, "actions": []}
-                )
-                entry["actions"].append((action, days_left))
-
-        sent_count = 0
-        for data in to_notify.values():
-            resp = data["responsable"]
-            action_items = sorted(data["actions"], key=lambda item: item[1])
-
-            # TODO: Intégration Microsoft Graph API pour envoyer le mail
-            # _send_outlook_email(resp.email, action_items)
-
-            logger.info(
-                "Notification générée pour %s (%s) : %d actions (la plus urgente à J%+d)",
-                resp.display_name, resp.email, len(action_items), action_items[0][1],
-            )
-
-            db.add(
-                RelanceLog(
-                    responsable_id=resp.id,
-                    action_ids=",".join(str(item[0].id) for item in action_items),
-                    email_status="sent_simulated",  # Stub avant implé API Graph
-                )
-            )
-            sent_count += 1
-
-        db.commit()
-        skipped = len(recently_notified)
-        logger.info(
-            "Relances terminées : %d notifications, %d responsables en période de "
-            "silence (%d jours).",
-            sent_count, skipped, settings.relance_cooldown_days,
-        )
-        return {"status": "success", "sent": sent_count, "skipped_cooldown": skipped}
-
-    except Exception:
+    except Exception as exc:
         db.rollback()
-        logger.exception("Erreur lors de l'envoi des notifications")
-        raise
+        logger.exception("Erreur lors de l'envoi des relances %s", kind)
+        raise self.retry(exc=exc, countdown=300)
     finally:
         db.close()
 
@@ -129,30 +166,33 @@ def mark_overdue_actions():
     Le statut n'était recalculé qu'à l'écriture (API ou import Excel) : une
     action créée en avance et jamais retouchée restait « à faire » des mois
     après son échéance, et n'apparaissait donc dans aucun tableau de bord de
-    retard basé sur le statut.
+    retard fondé sur le statut.
+
+    `BLOQUE` est exclu volontairement : c'est un constat humain, le remplacer
+    par « en retard » ferait perdre l'information utile au pilotage. Le retard
+    de ces actions reste visible par la date.
     """
     db = SessionLocal()
     try:
         today = datetime.now(timezone.utc).date()
-        updated = (
+        modifiees = (
             db.query(Action)
             .filter(
                 Action.deadline.isnot(None),
                 Action.deadline <= today,
                 Action.progress < 100.0,
-                Action.status.notin_([ActionStatus.EN_RETARD, ActionStatus.TERMINE]),
+                Action.status.notin_(
+                    [ActionStatus.EN_RETARD, ActionStatus.TERMINE, ActionStatus.BLOQUE]
+                ),
             )
             .update(
-                {
-                    Action.status: ActionStatus.EN_RETARD,
-                    Action.updated_at: func.now(),
-                },
+                {Action.status: ActionStatus.EN_RETARD, Action.updated_at: func.now()},
                 synchronize_session=False,
             )
         )
         db.commit()
-        logger.info("Actions basculées en retard : %d", updated)
-        return {"status": "success", "updated": updated}
+        logger.info("Actions basculées en retard : %d", modifiees)
+        return {"status": "success", "updated": modifiees}
     except Exception:
         db.rollback()
         logger.exception("Erreur lors du marquage des actions en retard")

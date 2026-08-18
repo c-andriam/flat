@@ -8,6 +8,8 @@ from app.config import settings
 from app.database import async_engine, get_async_db
 from app.logging_config import install_middlewares_and_handlers, setup_logging
 from app.routers import core as core_router
+from app.routers import relances as relances_router
+from app.routers import reports as reports_router
 from app.routers import users as users_router
 from app.services.events import close_redis
 from app.services.health import perform_health_check_async
@@ -38,6 +40,22 @@ tags_metadata = [
         "description": (
             "Traces système en lecture seule : synchronisations Excel "
             "(SyncLog) et envois de relances par email (RelanceLog)."
+        ),
+    },
+    {
+        "name": "reports",
+        "description": (
+            "Rapports consolides : portefeuille, projet, charge par "
+            "responsable, prevision hebdomadaire des echeances."
+        ),
+    },
+    {
+        "name": "relances",
+        "description": (
+            "Rappels par email aux responsables (Outlook / Microsoft Graph) : "
+            "apercu du message, envoi individuel ou campagne. Les actions "
+            "concernees sont deduites de l'identifiant du responsable et de "
+            "la nature du rappel."
         ),
     },
     {
@@ -92,6 +110,8 @@ app = FastAPI(
 install_middlewares_and_handlers(app, "core-api")
 
 app.include_router(core_router.router, prefix="/api/v1")
+app.include_router(reports_router.router, prefix="/api/v1")
+app.include_router(relances_router.router, prefix="/api/v1")
 app.include_router(users_router.router, prefix="/api/v1")
 
 # --- CORS ---

@@ -78,7 +78,16 @@ class ActionStatus(str, enum.Enum):
     A_FAIRE = "a_faire"
     EN_COURS = "en_cours"
     EN_RETARD = "en_retard"
+    # « Bloqué » figure dans la légende des classeurs de suivi (code couleur
+    # rouge) mais n'existait pas dans le modèle : une action à l'arrêt ne
+    # pouvait être distinguée d'une action simplement en retard.
+    BLOQUE = "bloque"
     TERMINE = "termine"
+
+    @property
+    def is_open(self) -> bool:
+        """Action encore à traiter (par opposition à terminée)."""
+        return self is not ActionStatus.TERMINE
 
 
 class Action(UUIDMixin, Base):
