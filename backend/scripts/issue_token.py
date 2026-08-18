@@ -27,13 +27,14 @@ le traiter comme un mot de passe, ne pas le coller dans un ticket ni un chat.
 """
 
 import argparse
-import os
 import sys
 import uuid
 from pathlib import Path
 
 # Permet `python3 scripts/issue_token.py` depuis /app comme depuis backend/.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from sqlalchemy.exc import OperationalError  # noqa: E402
 
 from app.config import settings  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
@@ -73,7 +74,19 @@ def main() -> int:
 
     db = SessionLocal()
     try:
-        user = db.query(User).filter(User.email == email).first()
+        try:
+            user = db.query(User).filter(User.email == email).first()
+        except OperationalError as exc:
+            # Une erreur de configuration ne mérite pas 100 lignes de trace
+            # SQLAlchemy : on renvoie la ligne utile et où aller plus loin.
+            detail = str(exc.orig).strip().splitlines()[0] if exc.orig else str(exc)
+            print(f"\n  Base de données injoignable : {detail}\n", file=sys.stderr)
+            print(
+                "  Diagnostic complet :  python3 scripts/check_config.py"
+                "  (ou : make doctor)\n",
+                file=sys.stderr,
+            )
+            return 1
         if user is None:
             # Pas d'`oid` Entra ID tant que la personne ne s'est pas connectée
             # en SSO : on pose un identifiant local, que le callback remplacera

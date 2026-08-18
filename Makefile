@@ -13,7 +13,7 @@ NC			= \033[0m
 # ==============================================================================
 # Règles principales
 # ==============================================================================
-.PHONY: all build up down start stop status logs clean fclean re migrate makemigrations db-update db-shell test test-unit token
+.PHONY: all build up down start stop status logs clean fclean re migrate makemigrations db-update db-shell test test-unit token doctor
 
 # Règle par défaut
 all: up
@@ -76,7 +76,17 @@ db-update: migrate
 # maintenant par un conteneur jetable qui lit les identifiants dans .env.
 db-shell:
 	@echo "$(YELLOW) Connexion à la base de données PostgreSQL (Supabase)...$(NC)"
-	$(PODMAN) run --rm -it --env-file .env --network dsio-internal-net postgres:16-alpine 		sh -c 'PGPASSWORD="$$POSTGRES_PASSWORD" psql -h "$$POSTGRES_HOST" -p "$${POSTGRES_PORT:-5432}" -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
+	$(PODMAN) run --rm -it --env-file .env --network dsio-internal-net postgres:16-alpine sh -c 'PGPASSWORD="$$POSTGRES_PASSWORD" psql -h "$$POSTGRES_HOST" -p "$${POSTGRES_PORT:-5432}" -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
+
+# ==============================================================================
+# Diagnostic
+# ==============================================================================
+
+# Verifie en une page ce qui empeche la plateforme de fonctionner :
+# variables d'environnement, DNS, PostgreSQL, Redis, SSO, amorcage RBAC.
+# A lancer en premier devant toute erreur de demarrage ou de connexion.
+doctor:
+	@$(PODMAN) exec dsio-core-api python3 scripts/check_config.py
 
 # ==============================================================================
 # Jeton d'accès (tests manuels via Swagger / curl / Postman)
