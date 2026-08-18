@@ -67,7 +67,7 @@ async def get_user(
     return user
 
 
-@router.patch(
+@router.put(
     "/{user_id}",
     response_model=UserOut,
     summary="Modifier un utilisateur",

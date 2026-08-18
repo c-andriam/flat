@@ -18,7 +18,6 @@ from sqlalchemy.dialects import postgresql  # noqa: E402
 
 from app.models.project import ActionStatus  # noqa: E402
 from app.schemas.project_schema import (  # noqa: E402
-    ActionReplace,
     ActionUpdate,
     ProjectUpdate,
     ResponsableUpdate,
@@ -128,36 +127,30 @@ def test_patch_valeur_hors_bornes_rejetee():
         ActionUpdate(progress=150.0)
 
 
-# --- PUT : remplacement complet -------------------------------------------
+# --- PUT : la charge utile accepte un champ comme tous -------------------
 
-def test_put_exige_les_champs_obligatoires():
-    with pytest.raises(pydantic.ValidationError):
-        ActionReplace(description="incomplet")
-
-
-def test_put_remet_les_champs_absents_a_vide():
-    """C'est la différence avec PATCH : ce qui n'est pas fourni est effacé."""
-    remplacement = ActionReplace(
+def test_put_accepte_une_charge_utile_complete():
+    """Le même schéma sert au PUT d'un champ et à celui de tous : ce qui est
+    envoyé est appliqué, ce qui est absent est conservé."""
+    complet = ActionUpdate(
         description="Recueillir les besoins",
         resp_suivi="Xavier",
         responsable_names=["Meylis"],
         deadline=date(2026, 12, 31),
+        progress=25.0,
+        spi=90.0,
+        otd=80.0,
+        charges_hj=2.5,
+        commentaire="Tous les champs",
     )
-    charge = remplacement.model_dump()
-    assert charge["commentaire"] is None
-    assert charge["charges_hj"] is None
-    assert charge["date_realisation"] is None
-    assert charge["progress"] == 0.0
+    charge = complet.model_dump(exclude_unset=True)
+    assert len(charge) == 9
+    assert charge["responsable_names"] == ["Meylis"]
 
 
 def test_put_dedoublonne_les_responsables():
-    remplacement = ActionReplace(
-        description="x",
-        resp_suivi="Xavier",
-        responsable_names=["Meylis", " Meylis ", "Xavier"],
-        deadline=date(2026, 12, 31),
-    )
-    assert remplacement.responsable_names == ["Meylis", "Xavier"]
+    partiel = ActionUpdate(responsable_names=["Meylis", " Meylis ", "Xavier"])
+    assert partiel.responsable_names == ["Meylis", "Xavier"]
 
 
 # --- Gabarits d'email ------------------------------------------------------

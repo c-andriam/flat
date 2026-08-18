@@ -44,7 +44,7 @@ def test_map_responsable_email(api):
     name = f"Test-{uuid.uuid4().hex[:6]}"
     created = api.post("/responsables", json={"display_name": name}).json()
 
-    resp = api.patch(f"/responsables/{created['id']}", json={"email": "test@trimeta.mg"})
+    resp = api.put(f"/responsables/{created['id']}", json={"email": "test@trimeta.mg"})
     assert resp.status_code == 200
     assert resp.json()["email"] == "test@trimeta.mg"
     assert resp.json()["is_mapped"] is True

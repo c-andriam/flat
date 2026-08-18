@@ -93,7 +93,7 @@ def test_list_actions_filter_by_project(api, test_project):
 
 def test_update_action_progress(api, test_project):
     created = api.post("/actions", json=_valid_action_payload(test_project["id"])).json()
-    resp = api.patch(f"/actions/{created['id']}", json={"progress": 50.0})
+    resp = api.put(f"/actions/{created['id']}", json={"progress": 50.0})
     assert resp.status_code == 200
     assert resp.json()["progress"] == 50.0
     # Passer à 50% ne change pas le statut tout seul, il faut le faire explicitement
@@ -102,7 +102,7 @@ def test_update_action_progress(api, test_project):
 
 def test_update_action_progress_100_marks_termine(api, test_project):
     created = api.post("/actions", json=_valid_action_payload(test_project["id"])).json()
-    resp = api.patch(f"/actions/{created['id']}", json={"progress": 100.0})
+    resp = api.put(f"/actions/{created['id']}", json={"progress": 100.0})
     assert resp.status_code == 200
     assert resp.json()["status"] == "termine"
     # date_realisation doit se remplir automatiquement dès que l'action est terminée
@@ -126,7 +126,7 @@ def test_create_action_progress_out_of_bounds_rejected(api, test_project):
 
 def test_update_action_progress_out_of_bounds_rejected(api, test_project):
     created = api.post("/actions", json=_valid_action_payload(test_project["id"])).json()
-    resp = api.patch(f"/actions/{created['id']}", json={"progress": 101.0})
+    resp = api.put(f"/actions/{created['id']}", json={"progress": 101.0})
     assert resp.status_code == 422
 
 
@@ -136,7 +136,7 @@ def test_update_action_phase_regenerates_numero(api, test_project_with_phases):
     )).json()
     assert "-01-" in created["numero"]
 
-    resp = api.patch(f"/actions/{created['id']}", json={"phase": "02"})
+    resp = api.put(f"/actions/{created['id']}", json={"phase": "02"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["phase"] == "02"
@@ -146,7 +146,7 @@ def test_update_action_phase_regenerates_numero(api, test_project_with_phases):
 
 def test_update_action_phase_forbidden_on_non_phased_project(api, test_project):
     created = api.post("/actions", json=_valid_action_payload(test_project["id"])).json()
-    resp = api.patch(f"/actions/{created['id']}", json={"phase": "01"})
+    resp = api.put(f"/actions/{created['id']}", json={"phase": "01"})
     assert resp.status_code == 422
 
 
@@ -154,5 +154,5 @@ def test_update_action_phase_required_on_phased_project(api, test_project_with_p
     created = api.post("/actions", json=_valid_action_payload(
         test_project_with_phases["id"], phase="01"
     )).json()
-    resp = api.patch(f"/actions/{created['id']}", json={"phase": None})
+    resp = api.put(f"/actions/{created['id']}", json={"phase": None})
     assert resp.status_code == 422

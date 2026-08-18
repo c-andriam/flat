@@ -24,14 +24,15 @@ def _validate_email(value: str | None) -> str | None:
 
 
 class PartialUpdate(BaseModel):
-    """Socle des charges utiles PATCH.
+    """Socle des charges utiles de modification (PUT).
 
     `extra="forbid"` : un champ mal orthographié (`progres` au lieu de
     `progress`) était auparavant ignoré en silence — l'appel renvoyait 200 et
     rien n'avait changé. Il produit maintenant un 422 qui nomme le champ fautif.
 
-    La charge utile doit aussi contenir au moins un champ : un PATCH vide est
-    presque toujours un bug côté client, pas une intention.
+    La charge utile doit aussi contenir au moins un champ : une requête vide
+    n'exprime aucune intention de modification, et c'est presque toujours un
+    bug côté client.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -43,18 +44,6 @@ class PartialUpdate(BaseModel):
                 "Charge utile vide : indiquer au moins un champ à modifier."
             )
         return self
-
-
-class FullReplace(BaseModel):
-    """Socle des charges utiles PUT.
-
-    PUT remplace la ressource entière : tout champ modifiable absent est remis
-    à sa valeur vide, il n'est pas conservé. C'est la différence avec PATCH, et
-    la raison pour laquelle les deux verbes coexistent plutôt que d'être des
-    alias l'un de l'autre.
-    """
-
-    model_config = ConfigDict(extra="forbid")
 
 
 # --- Responsable ---
@@ -101,29 +90,6 @@ class ResponsableUpdate(PartialUpdate):
     _check_email = field_validator("email")(_validate_email)
 
 
-class ResponsableReplace(FullReplace):
-    """PUT /responsables/{id} — remplace le responsable en entier."""
-
-    display_name: str = Field(..., min_length=1, max_length=255, description="Nom affiché.")
-    email: str | None = Field(
-        None,
-        description=(
-            "Adresse email. Absente, elle est effacée et le responsable "
-            "redevient non mappé — c'est la sémantique du remplacement complet."
-        ),
-    )
-
-    _check_email = field_validator("email")(_validate_email)
-
-    @field_validator("display_name")
-    @classmethod
-    def _strip(cls, v: str) -> str:
-        v = v.strip()
-        if not v:
-            raise ValueError("Le nom affiché ne peut pas être vide.")
-        return v
-
-
 class ResponsableOut(ResponsableBase):
     model_config = ConfigDict(from_attributes=True)
 
@@ -167,10 +133,15 @@ class ActionCreate(ActionBase):
     @field_validator("responsable_names")
     @classmethod
     def _clean_names(cls, values: list[str]) -> list[str]:
-        cleaned = []
+        # Dédoublonnage insensible à la casse : « Xavier » et « xavier »
+        # désignent la même personne, et deux fiches responsable signifient
+        # deux relances pour la même action.
+        cleaned: list[str] = []
+        vus: set[str] = set()
         for name in values:
             name = (name or "").strip()
-            if name and name not in cleaned:
+            if name and name.casefold() not in vus:
+                vus.add(name.casefold())
                 cleaned.append(name)
         if not cleaned:
             raise ValueError("Au moins un responsable de réalisation est requis.")
@@ -205,39 +176,20 @@ class ActionUpdate(PartialUpdate):
         ),
     )
 
-
-class ActionReplace(FullReplace):
-    """PUT /actions/{id} — remplace l'action en entier.
-
-    `project_id` et `numero` sont absents volontairement : déplacer une action
-    d'un projet à l'autre invaliderait sa numérotation, qui encode le code
-    projet et la phase. Une action se recrée, elle ne se déménage pas.
-    """
-
-    description: str = Field(..., min_length=1, description="Description ou titre de l'action.")
-    resp_suivi: str = Field(..., min_length=1, max_length=255, description="Responsable du suivi.")
-    responsable_names: list[str] = Field(
-        ..., min_length=1, description="Liste complète des responsables de réalisation."
-    )
-    deadline: date = Field(..., description="Date d'échéance.")
-    progress: float = Field(0.0, ge=0.0, le=100.0, description="Avancement de 0 à 100.")
-    spi: float = Field(0.0, ge=0.0, description="Schedule Performance Index.")
-    otd: float = Field(0.0, ge=0.0, description="On-Time Delivery.")
-    date_realisation: date | None = Field(None, description="Date réelle de complétion.")
-    charges_hj: float | None = Field(None, ge=0.0, description="Charges en Homme/Jour.")
-    commentaire: str | None = Field(None, description="Commentaire libre.")
-    phase: str | None = Field(None, max_length=10, description="Phase, si le projet en utilise.")
-    status: ActionStatus | None = Field(
-        None, description="Statut forcé. Absent, il est recalculé automatiquement."
-    )
-
     @field_validator("responsable_names")
     @classmethod
-    def _clean_names(cls, values: list[str]) -> list[str]:
-        cleaned = []
+    def _clean_names(cls, values: list[str] | None) -> list[str] | None:
+        # Même nettoyage qu'à la création : les noms viennent d'une saisie
+        # manuelle, et « Meylis » et « Meylis  » créeraient deux fiches
+        # responsable, donc deux relances pour la même action.
+        if values is None:
+            return None
+        cleaned: list[str] = []
+        vus: set[str] = set()
         for name in values:
             name = (name or "").strip()
-            if name and name not in cleaned:
+            if name and name.casefold() not in vus:
+                vus.add(name.casefold())
                 cleaned.append(name)
         if not cleaned:
             raise ValueError("Au moins un responsable de réalisation est requis.")
@@ -301,30 +253,6 @@ class ProjectUpdate(PartialUpdate):
             "projet porte déjà des actions."
         ),
     )
-
-
-class ProjectReplace(FullReplace):
-    """PUT /projects/{id} — remplace le projet en entier.
-
-    `has_phases` reste soumis au même garde-fou qu'en PATCH : le basculer sur
-    un projet qui porte déjà des actions désynchroniserait leur numérotation.
-    """
-
-    code: str = Field(..., min_length=1, max_length=50, description="Code unique du projet.")
-    name: str = Field(..., min_length=1, max_length=255, description="Nom complet du projet.")
-    source_file_path: str = Field(
-        ..., min_length=1, max_length=1024, description="Chemin du fichier Excel source."
-    )
-    has_phases: bool = Field(False, description="Le projet utilise-t-il les phases.")
-    is_active: bool = Field(True, description="Projet actif ou archivé.")
-
-    @field_validator("code")
-    @classmethod
-    def _normalize_code(cls, v: str) -> str:
-        v = v.strip()
-        if not v:
-            raise ValueError("Le code projet ne peut pas être vide.")
-        return v
 
 
 class ProjectOut(ProjectBase):

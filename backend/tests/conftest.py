@@ -100,8 +100,8 @@ def api(base_url, auth_token):
         def post(self, path, **kw):
             return self.session.post(self._url(path), timeout=10, **kw)
 
-        def patch(self, path, **kw):
-            return self.session.patch(self._url(path), timeout=10, **kw)
+        def put(self, path, **kw):
+            return self.session.put(self._url(path), timeout=10, **kw)
 
         def delete(self, path, **kw):
             return self.session.delete(self._url(path), timeout=10, **kw)
@@ -123,8 +123,8 @@ def anon_api(base_url, http):
         def post(self, path, **kw):
             return http.post(self._url(path), timeout=10, **kw)
 
-        def patch(self, path, **kw):
-            return http.patch(self._url(path), timeout=10, **kw)
+        def put(self, path, **kw):
+            return http.put(self._url(path), timeout=10, **kw)
 
         def delete(self, path, **kw):
             return http.delete(self._url(path), timeout=10, **kw)

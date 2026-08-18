@@ -29,8 +29,8 @@ class User(UUIDMixin, Base):
     role = Column(Enum(UserRole), default=UserRole.LECTEUR, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
 
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
-    last_login_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
 
     def __repr__(self) -> str:
         return f"<User id={self.id} email={self.email!r} role={self.role}>"

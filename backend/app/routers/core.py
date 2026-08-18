@@ -20,17 +20,14 @@ from app.models.project import (
 from app.schemas.project_schema import (
     ActionCreate,
     ActionOut,
-    ActionReplace,
     ActionUpdate,
     ProjectCreate,
     ProjectOut,
-    ProjectReplace,
     ProjectUpdate,
     ProjectWithActionsOut,
     RelanceLogOut,
     ResponsableCreate,
     ResponsableOut,
-    ResponsableReplace,
     ResponsableUpdate,
     SyncLogOut,
 )
@@ -93,20 +90,22 @@ async def _load_action(db: AsyncSession, action_id: uuid.UUID) -> Action | None:
 
 
 # ---------------------------------------------------------------------------
-# PATCH et PUT
+# Modification des ressources : PUT
 #
-# HTTP ne définit pas de verbe « UPDATE » : la modification s'exprime avec
-# PATCH (partiel) ou PUT (remplacement complet). Les deux sont exposés côté
-# à côté, sur les mêmes règles métier :
+# `PUT` est le seul verbe de modification exposé. Il accepte indifféremment :
 #
-#   PATCH  n'applique que les champs présents dans la charge utile — un seul
-#          champ comme dix. Un champ absent n'est pas touché.
-#   PUT    remplace la ressource entière : un champ modifiable absent est
-#          remis à sa valeur vide, il n'est pas conservé.
+#   - un seul champ            {"progress": 10}
+#   - plusieurs champs         {"progress": 10, "commentaire": "en attente"}
+#   - la ressource entière     {"description": ..., "deadline": ..., ...}
 #
-# En faire des alias l'un de l'autre serait le piège classique : un client qui
-# envoie un PUT partiel effacerait des données sans s'en rendre compte, ou au
-# contraire croirait avoir réinitialisé un champ qui resterait renseigné.
+# Seuls les champs présents dans la charge utile sont appliqués ; ceux qui sont
+# absents gardent leur valeur. La réponse renvoie toujours la ressource
+# complète après modification, quel que soit le nombre de champs envoyés.
+#
+# Deux garde-fous restent en place : un champ inconnu est refusé en 422 plutôt
+# qu'ignoré en silence (une faute de frappe comme `progres` renvoyait 200 sans
+# rien modifier), et une charge utile entièrement vide est refusée, n'exprimant
+# aucune intention de modification.
 # ---------------------------------------------------------------------------
 
 async def _verifier_bascule_phases(db: AsyncSession, project: Project, nouveau: bool | None) -> None:
@@ -145,13 +144,19 @@ async def _sync_action_responsables(db: AsyncSession, action: Action, noms: list
         if nom and nom not in voulus:
             voulus.append(nom)
 
-    courants = {r.display_name: r for r in action.responsables}
-    for nom, responsable in courants.items():
-        if nom not in voulus:
+    voulus_casefold = {n.casefold() for n in voulus}
+    for responsable in list(action.responsables):
+        if responsable.display_name.casefold() not in voulus_casefold:
             action.responsables.remove(responsable)
 
+    # Index insensible à la casse des responsables déjà rattachés, y compris
+    # ceux créés plus haut dans cette même boucle : sans lui, « Xavier » puis
+    # « xavier » produiraient deux fiches, la seconde n'étant pas encore
+    # visible en base (la session n'est pas en autoflush).
+    deja = {r.display_name.casefold(): r for r in action.responsables}
+
     for nom in voulus:
-        if nom in courants:
+        if nom.casefold() in deja:
             continue
         # Insensible à la casse : les noms viennent d'Excel, où « Xavier » et
         # « xavier » cohabitent. Deux fiches pour la même personne, ce sont
@@ -164,6 +169,7 @@ async def _sync_action_responsables(db: AsyncSession, action: Action, noms: list
             responsable = Responsable(display_name=nom, is_mapped=False)
             db.add(responsable)
         action.responsables.append(responsable)
+        deja[nom.casefold()] = responsable
 
 
 def _valider_phase(project: Project, phase: str | None) -> str | None:
@@ -277,15 +283,17 @@ async def create_project(payload: ProjectCreate, db: AsyncSession = Depends(get_
     return project
 
 
-@router.patch(
+@router.put(
     "/projects/{project_id}",
     response_model=ProjectOut,
     dependencies=[require_writer],
     tags=["projects"],
-    summary="Mettre à jour un projet",
+    summary="Modifier un projet",
     description=(
-        "Mise à jour partielle (seuls les champs fournis sont modifiés). "
-        "`has_phases` ne peut plus être basculé une fois que le projet porte "
+        "Applique les champs présents dans la charge utile et renvoie le "
+        "projet complet. Un seul champ, plusieurs, ou tous : les champs "
+        "absents gardent leur valeur.\n\n"
+        "`has_phases` ne peut pas être basculé une fois que le projet porte "
         "des actions : le numéro d'action encode la phase (`P01-02-05`), le "
         "changer a posteriori désynchroniserait toute la numérotation."
     ),
@@ -325,54 +333,6 @@ async def update_project(
         raise HTTPException(
             status_code=409,
             detail="Conflit lors de la mise à jour (ex: code déjà utilisé)",
-        )
-
-    await db.refresh(project)
-    await publish_event("project_updated", {"id": project.id, "code": project.code})
-    return project
-
-
-@router.put(
-    "/projects/{project_id}",
-    response_model=ProjectOut,
-    dependencies=[require_writer],
-    tags=["projects"],
-    summary="Remplacer un projet",
-    description=(
-        "Remplacement complet : tous les champs modifiables doivent être "
-        "fournis, et ceux qui ne le sont pas reprennent leur valeur par "
-        "défaut. Pour ne modifier qu'un ou deux champs, utiliser `PATCH` sur "
-        "la même URL."
-    ),
-    response_description="Le projet remplacé.",
-    responses={
-        **AUTH_RESPONSES,
-        404: {"description": "Aucun projet avec cet identifiant."},
-        409: {"description": "Code déjà pris, ou bascule de `has_phases` interdite."},
-    },
-)
-async def replace_project(
-    payload: ProjectReplace,
-    project_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du projet."),
-    db: AsyncSession = Depends(get_async_db),
-):
-    result = await db.execute(select(Project).filter(Project.id == project_id))
-    project = result.scalars().first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Projet introuvable")
-
-    await _verifier_bascule_phases(db, project, payload.has_phases)
-
-    for field, value in payload.model_dump().items():
-        setattr(project, field, value)
-
-    try:
-        await db.commit()
-    except IntegrityError:
-        await db.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail="Conflit lors du remplacement (ex: code déjà utilisé)",
         )
 
     await db.refresh(project)
@@ -689,9 +649,15 @@ async def create_action(payload: ActionCreate, db: AsyncSession = Depends(get_as
         action = Action(**data, numero=generated_numero, phase=phase)
         apply_status(action)
 
+        # Les responsables sont rattachés AVANT `db.add` : tant que l'action
+        # est hors session, SQLAlchemy ne propage pas l'association vers
+        # `Responsable.actions` — ce qui tombe bien, car cette propagation
+        # exigerait de charger toutes les actions du responsable, une IO
+        # synchrone impossible ici (MissingGreenlet). La table d'association
+        # est de toute façon alimentée depuis ce côté-ci de la relation.
         await _sync_action_responsables(db, action, payload.responsable_names)
-
         db.add(action)
+
         try:
             await db.commit()
         except IntegrityError:
@@ -718,18 +684,22 @@ async def create_action(payload: ActionCreate, db: AsyncSession = Depends(get_as
         return created
 
 
-@router.patch(
+@router.put(
     "/actions/{action_id}",
     response_model=ActionOut,
     dependencies=[require_writer],
     tags=["actions"],
-    summary="Mettre à jour une action",
+    summary="Modifier une action",
     description=(
-        "Permet de cocher/valider une action depuis le logiciel (ex: "
-        "`progress`). Le statut et la date de réalisation sont recalculés "
-        "automatiquement : 100 % bascule sur `TERMINE` et date le jour même, "
-        "une échéance atteinte bascule sur `EN_RETARD`. Fournir `status` "
-        "explicitement force la valeur."
+        "Applique les champs présents dans la charge utile et renvoie "
+        "l'action complète. Envoyer `{\"progress\": 10}` ne touche qu'à "
+        "l'avancement ; envoyer l'ensemble des champs les met tous à jour.\n\n"
+        "Le statut et la date de réalisation sont recalculés automatiquement : "
+        "100 % bascule sur `TERMINE` et date le jour même, une échéance "
+        "atteinte bascule sur `EN_RETARD`. Fournir `status` explicitement "
+        "force la valeur.\n\n"
+        "`responsable_names` remplace la liste des responsables ; absent, "
+        "elle est conservée."
     ),
     response_description="L'action mise à jour.",
     responses={
@@ -805,86 +775,6 @@ async def update_action(
         {"id": updated.id, "numero": updated.numero, "status": updated.status},
     )
     return updated
-
-
-@router.put(
-    "/actions/{action_id}",
-    response_model=ActionOut,
-    dependencies=[require_writer],
-    tags=["actions"],
-    summary="Remplacer une action",
-    description=(
-        "Remplacement complet de l'action. Tout champ modifiable absent de la "
-        "charge utile est remis à sa valeur vide — `commentaire`, "
-        "`charges_hj` ou `date_realisation` omis sont effacés, et "
-        "`responsable_names` remplace intégralement la liste des "
-        "responsables.\n\n"
-        "Omettre `status` demande son recalcul complet à partir de "
-        "l'avancement et de l'échéance, sans tenir compte du statut "
-        "précédent : c'est la différence avec `PATCH`, qui conserve un "
-        "`en_cours` ou un `bloque` positionné à la main.\n\n"
-        "`project_id` et `numero` ne sont pas modifiables : le numéro encode "
-        "le code projet et la phase, déplacer une action le rendrait faux."
-    ),
-    response_description="L'action remplacée.",
-    responses={
-        **AUTH_RESPONSES,
-        404: {"description": "Aucune action avec cet identifiant."},
-        422: {"description": "Phase incohérente avec le mode du projet."},
-        409: {"description": "Conflit de numérotation."},
-    },
-)
-async def replace_action(
-    payload: ActionReplace,
-    action_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) de l'action."),
-    db: AsyncSession = Depends(get_async_db),
-):
-    result = await db.execute(
-        select(Action)
-        .options(selectinload(Action.responsables), selectinload(Action.project))
-        .filter(Action.id == action_id)
-    )
-    action = result.scalars().first()
-    if not action:
-        raise HTTPException(status_code=404, detail="Action introuvable")
-
-    project = action.project
-    nouvelle_phase = _valider_phase(project, payload.phase)
-
-    donnees = payload.model_dump(exclude={"responsable_names", "phase", "status"})
-    for field, value in donnees.items():
-        setattr(action, field, value)
-
-    if nouvelle_phase != action.phase:
-        action.phase = nouvelle_phase
-        action.numero = await _generate_numero(db, project, nouvelle_phase)
-
-    await _sync_action_responsables(db, action, payload.responsable_names)
-
-    if payload.status is not None:
-        action.status = payload.status
-    else:
-        # `current=None` : le remplacement complet repart des seules données
-        # fournies, il ne reconduit pas le statut manuel précédent.
-        action.status = compute_status(action.progress, action.deadline, None)
-    if action.status is ActionStatus.TERMINE and action.date_realisation is None:
-        action.date_realisation = today_utc()
-
-    try:
-        await db.commit()
-    except IntegrityError:
-        await db.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail="Conflit lors du remplacement de l'action (numéro déjà utilisé ?)",
-        )
-
-    remplacee = await _load_action(db, action_id)
-    await publish_event(
-        "action_updated",
-        {"id": remplacee.id, "numero": remplacee.numero, "status": remplacee.status},
-    )
-    return remplacee
 
 
 @router.delete(
@@ -1001,13 +891,15 @@ async def create_responsable(payload: ResponsableCreate, db: AsyncSession = Depe
     return responsable
 
 
-@router.patch(
+@router.put(
     "/responsables/{responsable_id}",
     response_model=ResponsableOut,
     dependencies=[require_writer],
     tags=["responsables"],
-    summary="Associer/mettre à jour l'email d'un responsable",
+    summary="Modifier un responsable",
     description=(
+        "Applique les champs présents dans la charge utile et renvoie le "
+        "responsable complet.\n\n"
         "Renseigner `email` marque automatiquement le responsable comme mappé "
         "(`is_mapped=True`) ; envoyer `email: null` explicitement le démappe."
     ),
@@ -1041,55 +933,6 @@ async def update_responsable(
         raise HTTPException(
             status_code=409,
             detail="Conflit lors de la mise à jour (ex: nom déjà pris)",
-        )
-
-    await db.refresh(responsable)
-    await publish_event(
-        "responsable_updated",
-        {"id": responsable.id, "display_name": responsable.display_name},
-    )
-    return responsable
-
-
-@router.put(
-    "/responsables/{responsable_id}",
-    response_model=ResponsableOut,
-    dependencies=[require_writer],
-    tags=["responsables"],
-    summary="Remplacer un responsable",
-    description=(
-        "Remplacement complet. Omettre `email` l'efface et repasse le "
-        "responsable en non mappé — il cessera donc de recevoir les relances. "
-        "Pour ne changer qu'un champ, utiliser `PATCH`."
-    ),
-    response_description="Le responsable remplacé.",
-    responses={
-        **AUTH_RESPONSES,
-        404: {"description": "Aucun responsable avec cet identifiant."},
-        409: {"description": "Ce nom affiché est déjà pris."},
-    },
-)
-async def replace_responsable(
-    payload: ResponsableReplace,
-    responsable_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du responsable."),
-    db: AsyncSession = Depends(get_async_db),
-):
-    result = await db.execute(select(Responsable).filter(Responsable.id == responsable_id))
-    responsable = result.scalars().first()
-    if not responsable:
-        raise HTTPException(status_code=404, detail="Responsable introuvable")
-
-    responsable.display_name = payload.display_name
-    responsable.email = payload.email
-    responsable.is_mapped = payload.email is not None
-
-    try:
-        await db.commit()
-    except IntegrityError:
-        await db.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail="Conflit lors du remplacement (ex: nom déjà pris)",
         )
 
     await db.refresh(responsable)

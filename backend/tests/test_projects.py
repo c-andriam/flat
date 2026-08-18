@@ -55,7 +55,7 @@ def test_list_projects_includes_created(api, test_project):
 
 
 def test_update_project(api, test_project):
-    resp = api.patch(f"/projects/{test_project['id']}", json={"name": "Nom modifié"})
+    resp = api.put(f"/projects/{test_project['id']}", json={"name": "Nom modifié"})
     assert resp.status_code == 200
     assert resp.json()["name"] == "Nom modifié"
 

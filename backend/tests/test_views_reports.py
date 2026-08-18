@@ -53,7 +53,7 @@ def test_action_en_retard_apparait_dans_overdue(api, test_project):
 
 def test_action_terminee_sort_des_vues_ouvertes(api, test_project):
     cree = api.post("/actions", json=_action(test_project["id"], deadline="2020-01-01")).json()
-    api.patch(f"/actions/{cree['id']}", json={"progress": 100.0})
+    api.put(f"/actions/{cree['id']}", json={"progress": 100.0})
     numeros = [a["numero"] for a in api.get(f"/actions/overdue?project_id={test_project['id']}").json()]
     assert cree["numero"] not in numeros
 
@@ -75,54 +75,38 @@ def test_upcoming_suit_le_decalage_de_semaine(api, test_project):
     assert resp.status_code == 422  # borne haute à 52
 
 
-# --- PATCH / PUT -----------------------------------------------------------
+# --- PUT : un champ, plusieurs champs, ou tous -----------------------------
 
-def test_patch_un_seul_champ(api, test_project):
+def test_put_un_seul_champ(api, test_project):
+    """Le cas d'usage principal : cocher l'avancement d'une action sans avoir
+    à renvoyer le reste de ses champs."""
     cree = api.post("/actions", json=_action(test_project["id"])).json()
-    resp = api.patch(f"/actions/{cree['id']}", json={"commentaire": "Une seule modification"})
-    assert resp.status_code == 200
+    resp = api.put(f"/actions/{cree['id']}", json={"progress": 10})
+    assert resp.status_code == 200, resp.text
     corps = resp.json()
-    assert corps["commentaire"] == "Une seule modification"
-    assert corps["description"] == cree["description"]  # le reste est intact
+    assert corps["progress"] == 10.0
+    # La réponse contient l'action complète, pas seulement le champ modifié.
+    assert corps["description"] == cree["description"]
+    assert corps["numero"] == cree["numero"]
+    assert corps["responsables"] == cree["responsables"]
 
 
-def test_patch_plusieurs_champs(api, test_project):
+def test_put_plusieurs_champs(api, test_project):
     cree = api.post("/actions", json=_action(test_project["id"])).json()
-    resp = api.patch(
+    resp = api.put(
         f"/actions/{cree['id']}",
         json={"progress": 40.0, "commentaire": "Deux champs", "spi": 80.0},
     )
     assert resp.status_code == 200
     corps = resp.json()
     assert (corps["progress"], corps["commentaire"], corps["spi"]) == (40.0, "Deux champs", 80.0)
+    assert corps["description"] == cree["description"]
 
 
-def test_patch_vide_rejete(api, test_project):
+def test_put_tous_les_champs(api, test_project):
+    """Envoyer l'ensemble des champs modifiables doit fonctionner aussi bien
+    qu'un seul, et renvoyer l'action complète."""
     cree = api.post("/actions", json=_action(test_project["id"])).json()
-    assert api.patch(f"/actions/{cree['id']}", json={}).status_code == 422
-
-
-def test_patch_champ_inconnu_rejete(api, test_project):
-    cree = api.post("/actions", json=_action(test_project["id"])).json()
-    resp = api.patch(f"/actions/{cree['id']}", json={"progres": 50})
-    assert resp.status_code == 422, "une faute de frappe doit être signalée, pas ignorée"
-
-
-def test_patch_change_les_responsables(api, test_project):
-    cree = api.post("/actions", json=_action(test_project["id"])).json()
-    nouveau = f"Resp-{uuid.uuid4().hex[:6]}"
-    resp = api.patch(f"/actions/{cree['id']}", json={"responsable_names": [nouveau]})
-    assert resp.status_code == 200
-    assert [r["display_name"] for r in resp.json()["responsables"]] == [nouveau]
-
-
-def test_put_remplace_et_efface_les_champs_absents(api, test_project):
-    cree = api.post(
-        "/actions",
-        json=_action(test_project["id"], commentaire="À effacer", charges_hj=3.0),
-    ).json()
-    assert cree["commentaire"] == "À effacer"
-
     resp = api.put(
         f"/actions/{cree['id']}",
         json={
@@ -130,52 +114,117 @@ def test_put_remplace_et_efface_les_champs_absents(api, test_project):
             "resp_suivi": "Nouveau suivi",
             "responsable_names": ["Nouveau"],
             "deadline": "2027-01-31",
+            "progress": 25.0,
+            "spi": 90.0,
+            "otd": 80.0,
+            "charges_hj": 2.5,
+            "commentaire": "Tous les champs",
+            "date_realisation": None,
         },
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 200, resp.text
     corps = resp.json()
     assert corps["description"] == "Description remplacée"
-    assert corps["commentaire"] is None, "PUT doit effacer les champs absents"
-    assert corps["charges_hj"] is None
+    assert corps["resp_suivi"] == "Nouveau suivi"
+    assert corps["charges_hj"] == 2.5
     assert [r["display_name"] for r in corps["responsables"]] == ["Nouveau"]
 
 
-def test_put_exige_les_champs_obligatoires(api, test_project):
+def test_put_ne_touche_pas_aux_champs_absents(api, test_project):
+    """Différence assumée avec un PUT « remplacement complet » : ce qui n'est
+    pas envoyé est conservé, pas effacé."""
+    cree = api.post(
+        "/actions",
+        json=_action(test_project["id"], commentaire="À conserver", charges_hj=3.0),
+    ).json()
+
+    resp = api.put(f"/actions/{cree['id']}", json={"progress": 60.0})
+    assert resp.status_code == 200
+    corps = resp.json()
+    assert corps["progress"] == 60.0
+    assert corps["commentaire"] == "À conserver"
+    assert corps["charges_hj"] == 3.0
+
+
+def test_put_progress_100_bascule_le_statut(api, test_project):
     cree = api.post("/actions", json=_action(test_project["id"])).json()
-    resp = api.put(f"/actions/{cree['id']}", json={"description": "incomplet"})
-    assert resp.status_code == 422
+    corps = api.put(f"/actions/{cree['id']}", json={"progress": 100}).json()
+    assert corps["status"] == "termine"
+    assert corps["date_realisation"] is not None
+
+
+def test_put_vide_rejete(api, test_project):
+    cree = api.post("/actions", json=_action(test_project["id"])).json()
+    assert api.put(f"/actions/{cree['id']}", json={}).status_code == 422
+
+
+def test_put_champ_inconnu_rejete(api, test_project):
+    cree = api.post("/actions", json=_action(test_project["id"])).json()
+    resp = api.put(f"/actions/{cree['id']}", json={"progres": 50})
+    assert resp.status_code == 422, "une faute de frappe doit être signalée, pas ignorée"
+
+
+def test_put_change_les_responsables(api, test_project):
+    cree = api.post("/actions", json=_action(test_project["id"])).json()
+    nouveau = f"Resp-{uuid.uuid4().hex[:6]}"
+    resp = api.put(f"/actions/{cree['id']}", json={"responsable_names": [nouveau]})
+    assert resp.status_code == 200
+    assert [r["display_name"] for r in resp.json()["responsables"]] == [nouveau]
 
 
 def test_put_projet(api, test_project):
     resp = api.put(
         f"/projects/{test_project['id']}",
-        json={
-            "code": test_project["code"],
-            "name": "Nom remplacé",
-            "source_file_path": "x.xlsx",
-            "has_phases": False,
-            "is_active": False,
-        },
+        json={"name": "Nom modifié", "is_active": False},
     )
     assert resp.status_code == 200
-    assert resp.json()["name"] == "Nom remplacé"
-    assert resp.json()["is_active"] is False
+    corps = resp.json()
+    assert corps["name"] == "Nom modifié"
+    assert corps["is_active"] is False
+    # Le code projet n'est pas modifiable : il est encodé dans le numéro de
+    # chacune de ses actions.
+    assert corps["code"] == test_project["code"]
 
 
-def test_put_responsable_demappe_sans_email(api):
+def test_put_projet_code_refuse(api, test_project):
+    resp = api.put(f"/projects/{test_project['id']}", json={"code": "AUTRE"})
+    assert resp.status_code == 422
+
+
+def test_put_responsable_demappe_avec_email_null(api):
+    """Envoyer explicitement `null` démappe ; omettre le champ le conserve."""
     nom = f"Test-{uuid.uuid4().hex[:6]}"
     cree = api.post("/responsables", json={"display_name": nom, "email": "x@trimeta.mg"}).json()
     assert cree["is_mapped"] is True
 
-    resp = api.put(f"/responsables/{cree['id']}", json={"display_name": nom})
-    assert resp.status_code == 200
-    assert resp.json()["is_mapped"] is False
+    conserve = api.put(f"/responsables/{cree['id']}", json={"display_name": nom}).json()
+    assert conserve["is_mapped"] is True, "un champ absent ne doit pas être effacé"
+
+    demappe = api.put(f"/responsables/{cree['id']}", json={"email": None}).json()
+    assert demappe["is_mapped"] is False
+    assert demappe["email"] is None
     api.delete(f"/responsables/{cree['id']}")
+
+
+def test_patch_nest_plus_expose(api, test_project):
+    """PATCH a été retiré au profit de PUT."""
+    import requests
+
+    from tests.conftest import VERIFY_TLS
+
+    reponse = requests.patch(
+        f"{api._url('/projects/' + test_project['id'])}",
+        json={"name": "x"},
+        headers=dict(api.session.headers),
+        verify=VERIFY_TLS,
+        timeout=10,
+    )
+    assert reponse.status_code == 405
 
 
 def test_bascule_has_phases_refusee_si_actions(api, test_project):
     api.post("/actions", json=_action(test_project["id"]))
-    resp = api.patch(f"/projects/{test_project['id']}", json={"has_phases": True})
+    resp = api.put(f"/projects/{test_project['id']}", json={"has_phases": True})
     assert resp.status_code == 409
 
 
