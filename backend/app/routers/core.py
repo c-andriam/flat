@@ -153,8 +153,11 @@ async def _sync_action_responsables(db: AsyncSession, action: Action, noms: list
     for nom in voulus:
         if nom in courants:
             continue
+        # Insensible à la casse : les noms viennent d'Excel, où « Xavier » et
+        # « xavier » cohabitent. Deux fiches pour la même personne, ce sont
+        # deux relances pour la même action.
         result = await db.execute(
-            select(Responsable).filter(Responsable.display_name == nom)
+            select(Responsable).filter(func.lower(Responsable.display_name) == nom.lower())
         )
         responsable = result.scalars().first()
         if responsable is None:

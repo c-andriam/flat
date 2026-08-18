@@ -15,6 +15,7 @@ Flux :
 import logging
 from datetime import datetime, timezone
 
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
@@ -28,7 +29,7 @@ from app.models.project import (
 )
 from app.services.action_rules import apply_status
 from app.services.events import publish_event_sync
-from app.services.excel_parser import parse_excel_file
+from app.services.excel_parser import ParsedAction, parse_workbook
 from app.workers.celery_app import app
 
 logger = logging.getLogger("worker-ingestion")
@@ -59,8 +60,12 @@ def sync_project_file(self, project_id: str, file_path: str):
         if not project:
             raise ValueError(f"Projet introuvable : {project_id}")
 
-        # 1. Parser le fichier Excel
-        parsed_actions = parse_excel_file(file_path)
+        # 1. Parser le fichier Excel.
+        #    Le code projet vient de la base et non du fichier : les numéros y
+        #    sont saisis à la main, avec des préfixes parfois erronés (dans le
+        #    classeur de P10, des actions sont numérotées « P02 -13 - 1 »).
+        lecture = parse_workbook(file_path, project_code=project.code)
+        parsed_actions = lecture.actions
         if not parsed_actions:
             logger.warning("Aucune action trouvée dans %s", file_path)
 
@@ -83,11 +88,11 @@ def sync_project_file(self, project_id: str, file_path: str):
             except IntegrityError:
                 db.rollback()
                 errors += 1
-                logger.exception("Erreur d'intégrité pour l'action %s", row.get("numero"))
+                logger.exception("Erreur d'intégrité pour l'action %s", row.numero)
             except Exception:
                 db.rollback()
                 errors += 1
-                logger.exception("Erreur lors du traitement de l'action %s", row.get("numero"))
+                logger.exception("Erreur lors du traitement de l'action %s", row.numero)
 
         # 2. Mettre à jour le projet
         project.last_synced_at = datetime.now(timezone.utc)
@@ -97,14 +102,25 @@ def sync_project_file(self, project_id: str, file_path: str):
         sync_log.finished_at = datetime.now(timezone.utc)
         sync_log.status = SyncStatus.SUCCESS
         sync_log.files_processed = 1
+        # Les avertissements de lecture sont conservés dans le journal : une
+        # échéance illisible ou un numéro en double n'interrompt pas l'import
+        # mais doit rester consultable depuis `/api/v1/sync-logs`.
+        diagnostics = list(lecture.warnings)
         if errors:
-            sync_log.error_message = f"{errors} ligne(s) en erreur, voir les logs du worker."
+            diagnostics.append(f"{errors} ligne(s) en erreur, voir les logs du worker.")
+        if diagnostics:
+            sync_log.error_message = " | ".join(diagnostics)[:2000]
         db.commit()
 
         logger.info(
-            "Sync terminée pour %s : %d créées, %d mises à jour, %d erreurs",
+            "Sync terminée pour %s : %d créées, %d mises à jour, %d erreurs "
+            "(feuille %r, en-tête L%s, phases %s, %d lignes de section)",
             project.code, created, updated, errors,
+            lecture.sheet_name, lecture.header_row,
+            lecture.phases or "aucune", lecture.section_rows,
         )
+        for avertissement in lecture.warnings:
+            logger.warning("[%s] %s", project.code, avertissement)
 
         # 4. Notifier les clients connectés (dashboard temps réel)
         publish_event_sync(
@@ -143,7 +159,7 @@ def sync_project_file(self, project_id: str, file_path: str):
         db.close()
 
 
-def _upsert_action(db, project: Project, row: dict) -> bool:
+def _upsert_action(db, project: Project, row: ParsedAction) -> bool:
     """Crée ou met à jour une action à partir d'une ligne Excel parsée.
 
     Returns:
@@ -152,30 +168,30 @@ def _upsert_action(db, project: Project, row: dict) -> bool:
     existing = (
         db.query(Action)
         .options(selectinload(Action.responsables))
-        .filter(Action.project_id == project.id, Action.numero == row["numero"])
+        .filter(Action.project_id == project.id, Action.numero == row.numero)
         .first()
     )
 
-    # La phase est déduite du numéro (P01-02-05 -> phase "02") et n'est
-    # conservée que si le projet est configuré en mode phases. Sans ça, les
-    # actions importées arrivaient toutes avec phase=NULL alors que leur
-    # numéro encodait une phase : la génération de numéro côté API repartait
-    # ensuite de zéro et entrait en collision avec l'existant.
-    phase = row.get("phase") if project.has_phases else None
+    # La phase vient du parseur, qui la lit dans la colonne « Projets » ou dans
+    # la hiérarchie des sections. Elle n'est conservée que si le projet est
+    # configuré en mode phases : sinon les actions arriveraient avec un numéro
+    # à trois segments et une colonne `phase` vide, incohérence que la
+    # génération de numéro côté API ne saurait pas rattraper.
+    phase = row.phase if project.has_phases else None
 
-    action = existing or Action(project_id=project.id, numero=row["numero"])
+    action = existing or Action(project_id=project.id, numero=row.numero)
     is_new = existing is None
 
     action.phase = phase
-    action.description = row["description"]
-    action.resp_suivi = row["resp_suivi"]
-    action.progress = row["progress"]
-    action.spi = row["spi"]
-    action.otd = row["otd"]
-    action.deadline = row["deadline"]
-    action.date_realisation = row["date_realisation"]
-    action.charges_hj = row["charges_hj"]
-    action.commentaire = row["commentaire"]
+    action.description = row.description
+    action.resp_suivi = row.resp_suivi
+    action.progress = row.progress
+    action.spi = row.spi
+    action.otd = row.otd
+    action.deadline = row.deadline
+    action.date_realisation = row.date_realisation
+    action.charges_hj = row.charges_hj
+    action.commentaire = row.commentaire
 
     # Le fichier Excel fait autorité sur la date de réalisation (colonne J) :
     # on recalcule le statut sans y toucher.
@@ -185,7 +201,7 @@ def _upsert_action(db, project: Project, row: dict) -> bool:
         db.add(action)
         db.flush()  # Obtenir l'ID avant d'ajouter les responsables
 
-    _sync_responsables(db, action, row["responsable_names"])
+    _sync_responsables(db, action, row.responsable_names)
     return is_new
 
 
@@ -211,7 +227,14 @@ def _sync_responsables(db, action: Action, names: list[str]) -> None:
     for name in wanted:
         if name in current:
             continue
-        resp = db.query(Responsable).filter(Responsable.display_name == name).first()
+        # Comparaison insensible à la casse : les fichiers écrivent aussi bien
+        # « Xavier » que « xavier », et deux fiches pour la même personne
+        # signifient deux relances distinctes pour la même action.
+        resp = (
+            db.query(Responsable)
+            .filter(func.lower(Responsable.display_name) == name.lower())
+            .first()
+        )
         if not resp:
             resp = Responsable(display_name=name, is_mapped=False)
             db.add(resp)

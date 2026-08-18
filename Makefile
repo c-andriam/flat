@@ -13,7 +13,7 @@ NC			= \033[0m
 # ==============================================================================
 # Règles principales
 # ==============================================================================
-.PHONY: all build up down start stop status logs clean fclean re migrate makemigrations db-update db-shell test test-unit token doctor up-local down-local migrate-local
+.PHONY: all build up down start stop status logs clean fclean re migrate makemigrations db-update db-shell test test-unit token doctor up-local down-local migrate-local import
 
 # Règle par défaut
 all: up
@@ -104,6 +104,23 @@ migrate-local:
 down-local:
 	@echo "$(RED) Arret de la stack locale...$(NC)"
 	$(COMPOSE) $(LOCAL_DB) down
+
+# ==============================================================================
+# Import du dossier de suivi (arborescence SharePoint synchronisee)
+# ==============================================================================
+
+# Cree les projets et importe leurs actions depuis un dossier
+# « P01 - Libelle / classeur.xlsx ». Simulation par defaut.
+#   make import DIR="/data/Projet encours"
+#   make import DIR="/data/Projet encours" APPLY=1
+#   make import DIR="/data/Projet encours" ONLY=P10
+# Le dossier doit etre visible depuis le conteneur : monter le repertoire
+# SharePoint synchronise dans compose.yml (volumes) avant de lancer.
+APPLY ?=
+ONLY ?=
+import:
+	@if [ -z "$(DIR)" ]; then 		echo "$(RED) DIR est requis.$(NC)"; 		echo "   exemple : make import DIR=\"/data/Projet encours\""; 		exit 1; 	fi
+	@$(PODMAN) exec dsio-core-api python3 scripts/import_folder.py "$(DIR)" 		$(if $(APPLY),--apply,) $(if $(ONLY),--only $(ONLY),)
 
 # ==============================================================================
 # Diagnostic
