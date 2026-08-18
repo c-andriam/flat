@@ -27,7 +27,7 @@ from app.models.project import (
     SyncLog,
     SyncStatus,
 )
-from app.services.action_rules import apply_status
+from app.services.action_rules import apply_indicators
 from app.services.events import publish_event_sync
 from app.services.excel_parser import ParsedAction, parse_workbook
 from app.workers.celery_app import app
@@ -186,8 +186,13 @@ def _upsert_action(db, project: Project, row: ParsedAction) -> bool:
     action.description = row.description
     action.resp_suivi = row.resp_suivi
     action.progress = row.progress
-    action.spi = row.spi
-    action.otd = row.otd
+    # Le classeur fait autorité quand la cellule est renseignée ; laissée vide,
+    # la valeur est déduite de l'avancement et des dates plutôt que d'être
+    # stockée à 0, ce qui ferait chuter les moyennes des rapports.
+    if row.spi is not None:
+        action.spi = row.spi
+    if row.otd is not None:
+        action.otd = row.otd
     action.deadline = row.deadline
     action.date_realisation = row.date_realisation
     action.charges_hj = row.charges_hj
@@ -195,7 +200,12 @@ def _upsert_action(db, project: Project, row: ParsedAction) -> bool:
 
     # Le fichier Excel fait autorité sur la date de réalisation (colonne J) :
     # on recalcule le statut sans y toucher.
-    apply_status(action, manage_date_realisation=False)
+    apply_indicators(
+        action,
+        manage_date_realisation=False,
+        recompute_spi=row.spi is None,
+        recompute_otd=row.otd is None,
+    )
 
     if is_new:
         db.add(action)

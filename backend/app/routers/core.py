@@ -37,7 +37,13 @@ from app.services.action_queries import (
     build_actions_query,
     default_order,
 )
-from app.services.action_rules import apply_status, compute_status, today_utc
+from app.services.action_rules import (
+    apply_indicators,
+    compute_otd,
+    compute_spi,
+    compute_status,
+    today_utc,
+)
 from app.services.events import publish_event
 from app.services.health import perform_health_check_async
 from app.services.security import require_reader, require_writer
@@ -647,7 +653,15 @@ async def create_action(payload: ActionCreate, db: AsyncSession = Depends(get_as
     for attempt in range(1, max_attempts + 1):
         generated_numero = await _generate_numero(db, project, phase)
         action = Action(**data, numero=generated_numero, phase=phase)
-        apply_status(action)
+        # SPI et OTD ne sont recalculés que si l'appelant ne les a pas fournis
+        # explicitement : leurs valeurs par défaut (0.0) ne se distinguent pas
+        # d'une saisie volontaire autrement que par `model_fields_set`.
+        fournis = payload.model_fields_set
+        apply_indicators(
+            action,
+            recompute_spi="spi" not in fournis,
+            recompute_otd="otd" not in fournis,
+        )
 
         # Les responsables sont rattachés AVANT `db.add` : tant que l'action
         # est hors session, SQLAlchemy ne propage pas l'association vers
@@ -694,10 +708,16 @@ async def create_action(payload: ActionCreate, db: AsyncSession = Depends(get_as
         "Applique les champs présents dans la charge utile et renvoie "
         "l'action complète. Envoyer `{\"progress\": 10}` ne touche qu'à "
         "l'avancement ; envoyer l'ensemble des champs les met tous à jour.\n\n"
-        "Le statut et la date de réalisation sont recalculés automatiquement : "
-        "100 % bascule sur `TERMINE` et date le jour même, une échéance "
-        "atteinte bascule sur `EN_RETARD`. Fournir `status` explicitement "
-        "force la valeur.\n\n"
+        "Les quatre indicateurs se déduisent automatiquement de "
+        "l'avancement et des dates :\n\n"
+        "- `progress` à 100 bascule `status` sur `termine` et renseigne "
+        "`date_realisation` au jour même ;\n"
+        "- une échéance atteinte sans achèvement bascule sur `en_retard` ;\n"
+        "- `spi` suit l'avancement (objectif : 100 % à l'échéance) ;\n"
+        "- `otd` vaut 100 si l'action est livrée au plus tard à son échéance, "
+        "0 sinon ou tant qu'elle n'est pas livrée.\n\n"
+        "Fournir explicitement `status`, `spi` ou `otd` force la valeur "
+        "correspondante et désactive son recalcul.\n\n"
         "`responsable_names` remplace la liste des responsables ; absent, "
         "elle est conservée."
     ),
@@ -752,12 +772,22 @@ async def update_action(
     if noms is not None:
         await _sync_action_responsables(db, action, noms)
 
-    # Un `status` explicite dans la charge utile fait autorité ; sinon on
-    # dérive statut et date de réalisation de l'avancement et de l'échéance.
-    if "status" not in update_data:
-        apply_status(
+    # Les indicateurs se déduisent de l'avancement et des dates, sauf lorsque
+    # l'appelant en impose un explicitement — un chef de projet doit pouvoir
+    # corriger une valeur sans que l'enregistrement suivant l'écrase.
+    if "status" in update_data:
+        # Statut forcé : on ne recalcule que les indicateurs chiffrés.
+        action.spi = action.spi if "spi" in update_data else compute_spi(action.progress)
+        if "otd" not in update_data:
+            action.otd = compute_otd(
+                action.progress, action.deadline, action.date_realisation
+            )
+    else:
+        apply_indicators(
             action,
             manage_date_realisation="date_realisation" not in update_data,
+            recompute_spi="spi" not in update_data,
+            recompute_otd="otd" not in update_data,
         )
 
     try:

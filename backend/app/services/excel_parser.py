@@ -93,8 +93,8 @@ class ParsedAction:
     responsable_names: list[str]
     resp_suivi: str | None
     progress: float
-    spi: float
-    otd: float
+    spi: float | None
+    otd: float | None
     deadline: date | None
     date_realisation: date | None
     charges_hj: float | None
@@ -197,9 +197,19 @@ def _pourcentage(cellule) -> float:
     return max(0.0, min(100.0, round(valeur, 2)))
 
 
-def _ratio(cellule) -> float:
-    """SPI / OTD : même stockage en pourcentage, sans plafond à 100."""
-    valeur = _safe_float(cellule.value if cellule is not None else None) or 0.0
+def _ratio(cellule) -> float | None:
+    """SPI / OTD : même stockage en pourcentage, sans plafond à 100.
+
+    Renvoie `None` pour une cellule vide, afin que l'ingestion puisse
+    distinguer « le chef de projet n'a rien saisi » — auquel cas l'indicateur
+    est recalculé — de « il a saisi 0 », qui est une valeur volontaire.
+    """
+    brute = cellule.value if cellule is not None else None
+    if brute is None or (isinstance(brute, str) and not brute.strip()):
+        return None
+    valeur = _safe_float(brute)
+    if valeur is None:
+        return None
     if _est_pourcentage(cellule):
         valeur *= 100.0
     return round(max(0.0, valeur), 2)
