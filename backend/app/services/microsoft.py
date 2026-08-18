@@ -1,28 +1,28 @@
-import os
+import logging
+from functools import lru_cache
 
 import msal
 
-AZURE_REDIRECT_URI = os.getenv("AZURE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/callback")
+from app.config import settings
 
-
-def _required_env(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise RuntimeError(f"Variable d'environnement manquante: {name}")
-    return value
+logger = logging.getLogger("dsio.microsoft")
 
 SCOPES = ["User.Read"]
 
 
+@lru_cache(maxsize=1)
 def _msal_app() -> msal.ConfidentialClientApplication:
-    azure_client_id = _required_env("AZURE_CLIENT_ID")
-    azure_tenant_id = _required_env("AZURE_TENANT_ID")
-    azure_client_secret = _required_env("AZURE_CLIENT_SECRET")
-    authority = f"https://login.microsoftonline.com/{azure_tenant_id}"
+    """Client MSAL mis en cache pour la durée de vie du process.
 
+    Instancier `ConfidentialClientApplication` déclenche la récupération du
+    document de découverte OpenID de Microsoft. Le recréer à chaque appel
+    ajoutait un aller-retour réseau à `/login` comme à `/callback`, et
+    repartait d'un cache de jetons vide à chaque fois.
+    """
+    authority = f"https://login.microsoftonline.com/{settings.azure_tenant_id}"
     return msal.ConfidentialClientApplication(
-        client_id=azure_client_id,
-        client_credential=azure_client_secret,
+        client_id=settings.azure_client_id,
+        client_credential=settings.azure_client_secret,
         authority=authority,
     )
 
@@ -32,7 +32,7 @@ def get_auth_url(state: str) -> str:
     return _msal_app().get_authorization_request_url(
         scopes=SCOPES,
         state=state,
-        redirect_uri=AZURE_REDIRECT_URI,
+        redirect_uri=settings.azure_redirect_uri,
     )
 
 
@@ -40,13 +40,24 @@ def acquire_token_by_code(code: str) -> dict:
     """
     Échange le code d'autorisation contre un token, avec les claims utilisateur
     (oid, preferred_username/email, name) dans id_token_claims.
-    Lève une exception si Microsoft renvoie une erreur (code expiré, etc.).
+    Lève une ValueError si Microsoft renvoie une erreur (code expiré, etc.).
     """
     result = _msal_app().acquire_token_by_authorization_code(
         code=code,
         scopes=SCOPES,
-        redirect_uri=AZURE_REDIRECT_URI,
+        redirect_uri=settings.azure_redirect_uri,
     )
     if "error" in result:
-        raise ValueError(f"{result['error']}: {result.get('error_description')}")
+        # `error_description` de Microsoft contient le code d'erreur AADSTS
+        # utile au diagnostic, mais aussi parfois l'identifiant de la requête :
+        # on le journalise, on ne le renvoie pas tel quel au navigateur.
+        logger.warning(
+            "Échec acquire_token_by_authorization_code : %s — %s",
+            result.get("error"),
+            result.get("error_description"),
+        )
+        raise ValueError(
+            f"Échec de l'échange du code d'autorisation ({result['error']}). "
+            "Relancer la connexion depuis /api/v1/auth/login."
+        )
     return result

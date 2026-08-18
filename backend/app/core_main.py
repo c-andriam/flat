@@ -1,18 +1,18 @@
-import os
-
 from contextlib import asynccontextmanager
-from fastapi import Depends, FastAPI
+
+from fastapi import Depends, FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
-from redis import asyncio as aioredis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_async_db
+from app.config import settings
+from app.database import async_engine, get_async_db
+from app.logging_config import install_middlewares_and_handlers, setup_logging
 from app.routers import core as core_router
 from app.routers import users as users_router
+from app.services.events import close_redis
 from app.services.health import perform_health_check_async
 
-REDIS_HOST = os.getenv("REDIS_HOST", "redis")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+logger = setup_logging("core-api")
 
 tags_metadata = [
     {
@@ -49,9 +49,20 @@ tags_metadata = [
     },
     {
         "name": "monitoring",
-        "description": "Endpoints de supervision (health checks).",
+        "description": "Endpoints de supervision (health checks), accessibles sans jeton.",
     },
 ]
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("core-api démarré (env=%s)", settings.env)
+    yield
+    # Fermeture explicite : sans ça, les connexions Redis et le pool
+    # PostgreSQL restaient ouverts côté serveur jusqu'à leur expiration.
+    await close_redis()
+    await async_engine.dispose()
+    logger.info("core-api arrêté proprement")
 
 
 app = FastAPI(
@@ -60,28 +71,38 @@ app = FastAPI(
         "Microservice cœur de la plateforme DSIO (Trimeta Group) : gestion "
         "des projets, actions, responsables et comptes utilisateurs.\n\n"
         "### Authentification\n"
-        "Les routes protégées attendent un header `Authorization: Bearer "
-        "<token>` émis par le service `auth-api`."
+        "Toutes les routes métier attendent un header `Authorization: Bearer "
+        "<token>` émis par le service `auth-api` (`/api/v1/auth/login`).\n\n"
+        "### Rôles (RBAC)\n"
+        "- `lecteur` : lecture des projets, actions et responsables ;\n"
+        "- `responsable_si` : lecture + écriture, et accès aux journaux ;\n"
+        "- `admin` : idem, plus la gestion des comptes (`/users`).\n\n"
+        "Seuls les health checks sont ouverts sans jeton."
     ),
-    version="1.0.0",
+    version="1.1.0",
     docs_url="/api/v1/docs",
     redoc_url="/api/v1/redoc",
     openapi_url="/api/v1/openapi.json",
     contact={"name": "DSI - Trimeta Group"},
     openapi_tags=tags_metadata,
     swagger_ui_parameters={"defaultModelsExpandDepth": -1},
+    lifespan=lifespan,
 )
+
+install_middlewares_and_handlers(app, "core-api")
+
 app.include_router(core_router.router, prefix="/api/v1")
 app.include_router(users_router.router, prefix="/api/v1")
 
 # --- CORS ---
-FRONTEND_ORIGIN = os.getenv("FRONTEND_URL", "http://localhost:8080")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_ORIGIN],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+    # Sans ça, un client JavaScript ne peut pas lire le total de pagination.
+    expose_headers=["X-Total-Count", "X-Request-ID"],
 )
 
 
@@ -92,40 +113,40 @@ app.add_middleware(
     description=(
         "Endpoint de health check utilisé par les sondes de supervision "
         "(uptime, load balancer). Exécute un `SELECT 1` pour vérifier que "
-        "PostgreSQL répond, sans faire échouer la requête si la base est "
-        "injoignable."
+        "PostgreSQL répond, et renvoie 503 si la base est injoignable."
     ),
     response_description="Statut du service et de la connexion à la base de données.",
     responses={
         200: {
             "content": {
                 "application/json": {
-                    "examples": {
-                        "db_ok": {
-                            "summary": "Base de données accessible",
-                            "value": {
-                                "status": "ok",
-                                "service": "core-api",
-                                "database": "connected",
-                            },
-                        },
-                        "db_down": {
-                            "summary": "Base de données injoignable",
-                            "value": {
-                                "status": "ok",
-                                "service": "core-api",
-                                "database": "unreachable (...)",
-                            },
-                        },
+                    "example": {
+                        "status": "ok",
+                        "service": "core-api",
+                        "database": "connected",
                     }
                 }
             }
-        }
+        },
+        503: {
+            "description": "Base de données injoignable.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "status": "degraded",
+                        "service": "core-api",
+                        "database": "unreachable",
+                    }
+                }
+            },
+        },
     },
 )
-async def health_check(db: AsyncSession = Depends(get_async_db)):
-    """Vérifie que l'API tourne et que PostgreSQL répond aux requêtes à la racine."""
-    return await perform_health_check_async(db)
+async def health_check(response: Response, db: AsyncSession = Depends(get_async_db)):
+    """Vérifie que l'API tourne et que PostgreSQL répond aux requêtes."""
+    body, status_code = await perform_health_check_async(db, "core-api")
+    response.status_code = status_code
+    return body
 
 
 # NOTE : /api/v1/health est défini une seule fois, dans routers/core.py

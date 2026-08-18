@@ -1,41 +1,59 @@
-import os
+import logging
 from urllib.parse import quote_plus
 
 from sqlalchemy import create_engine
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
 
-POSTGRES_USER = os.environ["POSTGRES_USER"]
-POSTGRES_PASSWORD = quote_plus(os.environ["POSTGRES_PASSWORD"])
-POSTGRES_DB = os.environ["POSTGRES_DB"]
-# Pas de défaut "postgres" : ce projet utilise Supabase (hôte distant),
-# POSTGRES_HOST doit toujours être fourni explicitement via .env.
-POSTGRES_HOST = os.environ["POSTGRES_HOST"]
-POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
+from app.config import settings
 
-# URL synchrone pour psycopg2 (utilisée par Celery)
-SQLALCHEMY_DATABASE_URL = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+logger = logging.getLogger("dsio.database")
+
+_PASSWORD = quote_plus(settings.postgres_password)
+_DSN = (
+    f"{settings.postgres_user}:{_PASSWORD}"
+    f"@{settings.postgres_host}:{settings.postgres_port}/{settings.postgres_db}"
+)
+
+# URL synchrone pour psycopg2 (utilisée par Celery et Alembic)
+SQLALCHEMY_DATABASE_URL = f"postgresql://{_DSN}"
 # URL asynchrone pour asyncpg (utilisée par FastAPI)
-SQLALCHEMY_DATABASE_URL_ASYNC = f"postgresql+asyncpg://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+SQLALCHEMY_DATABASE_URL_ASYNC = f"postgresql+asyncpg://{_DSN}"
+
+_POOL_KWARGS = {
+    "pool_size": settings.db_pool_size,
+    "max_overflow": settings.db_max_overflow,
+    # Le pooler Supabase coupe les connexions inactives : les recycler avant
+    # évite les "server closed the connection unexpectedly" en production.
+    "pool_recycle": settings.db_pool_recycle,
+    "pool_pre_ping": True,
+    "echo": settings.db_echo,
+}
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
     connect_args={"sslmode": "require"},
-    pool_size=20,
-    max_overflow=10,
-    pool_pre_ping=True,
+    **_POOL_KWARGS,
 )
 
 async_engine = create_async_engine(
     SQLALCHEMY_DATABASE_URL_ASYNC,
     connect_args={"ssl": "require"},
-    pool_size=20,
-    max_overflow=10,
-    pool_pre_ping=True,
+    **_POOL_KWARGS,
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-AsyncSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=async_engine, class_=AsyncSession)
+
+# expire_on_commit=False : en asynchrone, un attribut expiré déclenche un
+# lazy-load hors contexte greenlet au moment de la sérialisation de la réponse
+# (erreur MissingGreenlet). Garder les objets utilisables après commit.
+AsyncSessionLocal = async_sessionmaker(
+    bind=async_engine,
+    class_=AsyncSession,
+    autocommit=False,
+    autoflush=False,
+    expire_on_commit=False,
+)
 
 Base = declarative_base()
 
@@ -50,7 +68,15 @@ def get_db():
 
 
 async def get_async_db():
-    """Dépendance FastAPI pour obtenir une session asynchrone ultra-rapide."""
-    async with AsyncSessionLocal() as db:
-        yield db
+    """Dépendance FastAPI pour obtenir une session asynchrone.
 
+    Toute exception remontant du endpoint provoque un rollback explicite : sans
+    ça la connexion retourne au pool avec une transaction ouverte, et la requête
+    suivante qui la réutilise échoue en `InFailedSQLTransaction`.
+    """
+    async with AsyncSessionLocal() as db:
+        try:
+            yield db
+        except Exception:
+            await db.rollback()
+            raise

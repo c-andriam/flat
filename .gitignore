@@ -1,5 +1,9 @@
 # --- Secrets ---
+# Toutes les variantes sont exclues ; seul .env.example est versionne,
+# et il ne doit contenir que des valeurs factices.
 .env
+.env.*
+!.env.example
 
 # --- Python ---
 __pycache__/

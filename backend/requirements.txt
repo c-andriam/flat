@@ -4,12 +4,22 @@ celery==5.3.6
 redis==5.0.1
 psycopg2-binary==2.9.9
 sqlalchemy==2.0.25
-pandas==2.2.0
 openpyxl==3.1.2
 msal==1.26.0
 PyJWT[crypto]==2.8.0
-python-multipart==0.0.9
+# CVE-2024-53981 : une requete multipart malformee pouvait saturer le CPU.
+# Corrige en 0.0.18. Aucun endpoint n'accepte de formulaire aujourd'hui, mais
+# la dependance est chargee par FastAPI.
+python-multipart==0.0.18
 alembic==1.13.1
 pydantic==2.6.1
 slowapi==0.1.9
 asyncpg==0.29.0
+
+# NOTE dependances :
+# - `pandas` a ete retire : aucun module ne l'importait (le parsing Excel passe
+#   par openpyxl seul). Il pesait une centaine de Mo dans l'image et allongeait
+#   chaque build.
+# - sqlalchemy 2.0.25 et psycopg2-binary 2.9.9 n'ont pas de roue Python 3.13 :
+#   ils imposent de rester sur l'image python:3.12-slim. Les monter en
+#   >=2.0.36 / >=2.9.10 avant tout changement d'image de base.

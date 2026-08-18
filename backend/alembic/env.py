@@ -1,14 +1,14 @@
 import os
 import sys
 from logging.config import fileConfig
-from urllib.parse import quote_plus
+
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 # Permet d'importer "app.*" quand alembic est lancé depuis backend/
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.database import Base  # noqa: E402
+from app.database import SQLALCHEMY_DATABASE_URL, Base  # noqa: E402
 from app import models  # noqa: E402,F401  (enregistre tous les modèles sur Base.metadata)
 
 config = context.config
@@ -20,12 +20,18 @@ target_metadata = Base.metadata
 
 
 def get_database_url() -> str:
-    user = os.environ["POSTGRES_USER"]
-    password = quote_plus(os.environ["POSTGRES_PASSWORD"])   # <- quote_plus() ajouté
-    db = os.environ["POSTGRES_DB"]
-    host = os.getenv("POSTGRES_HOST", "postgres")
-    port = os.getenv("POSTGRES_PORT", "5432")
-    return f"postgresql://{user}:{password}@{host}:{port}/{db}?sslmode=require"  # <- ?sslmode=require ajouté
+    """DSN de migration, dérivé de la configuration applicative.
+
+    L'URL était reconstruite ici à partir des variables d'environnement, en
+    double de `app.database` — avec un défaut `POSTGRES_HOST=postgres` qui
+    n'existe pas dans ce déploiement (base Supabase distante) : une variable
+    oubliée faisait migrer dans le vide au lieu d'échouer.
+
+    `sslmode=require` est passé dans l'URL car `engine_from_config` ne
+    transmet pas les `connect_args` du moteur applicatif.
+    """
+    separator = "&" if "?" in SQLALCHEMY_DATABASE_URL else "?"
+    return f"{SQLALCHEMY_DATABASE_URL}{separator}sslmode=require"
 
 
 def run_migrations_offline() -> None:
@@ -34,6 +40,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        compare_type=True,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -45,7 +52,13 @@ def run_migrations_online() -> None:
     connectable = engine_from_config(configuration, prefix="sqlalchemy.", poolclass=pool.NullPool)
 
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            # Détecte aussi les changements de type de colonne, sinon un
+            # String(50) passé à String(100) ne génère aucune migration.
+            compare_type=True,
+        )
         with context.begin_transaction():
             context.run_migrations()
 

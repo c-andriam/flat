@@ -13,7 +13,7 @@ NC			= \033[0m
 # ==============================================================================
 # Règles principales
 # ==============================================================================
-.PHONY: all build up down start stop status logs clean fclean re migrate makemigrations db-update db-shell test
+.PHONY: all build up down start stop status logs clean fclean re migrate makemigrations db-update db-shell test test-unit
 
 # Règle par défaut
 all: up
@@ -70,22 +70,32 @@ migrate:
 # Alias pour plus de clarté
 db-update: migrate
 
-# Ouvre un shell psql directement dans la base de données
+# Ouvre un shell psql sur la base Supabase.
+# L'ancienne cible visait un conteneur `db` qui n'existe pas (la base est
+# hébergée chez Supabase) et codait en dur l'identifiant du projet ; on passe
+# maintenant par un conteneur jetable qui lit les identifiants dans .env.
 db-shell:
-	@echo "$(YELLOW) Connexion à la base de données PostgreSQL...$(NC)"
-	$(PODMAN) exec -it db psql -U postgres.qlrlqdrmjccubxkwanck -d postgres
+	@echo "$(YELLOW) Connexion à la base de données PostgreSQL (Supabase)...$(NC)"
+	$(PODMAN) run --rm -it --env-file .env --network dsio-internal-net postgres:16-alpine 		sh -c 'PGPASSWORD="$$POSTGRES_PASSWORD" psql -h "$$POSTGRES_HOST" -p "$${POSTGRES_PORT:-5432}" -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
 
 # ==============================================================================
 # Tests automatisés
 # ==============================================================================
 
-# Lance la suite de tests d'intégration contre la stack déjà démarrée
-# (installe pytest/requests à la volée dans le conteneur core-api).
+# Lance la suite complète (unitaire + intégration) contre la stack démarrée.
+# Le gateway redirige HTTP vers HTTPS : l'ancienne URL http://gateway:80 faisait
+# échouer tous les tests sur la validation du certificat auto-signé.
 test:
 	@echo "$(YELLOW) Installation des dépendances de test...$(NC)"
 	$(PODMAN) exec dsio-core-api pip install --quiet -r requirements-dev.txt
 	@echo "$(GREEN) Lancement des tests...$(NC)"
-	$(PODMAN) exec -e DSIO_TEST_BASE_URL=http://gateway:80 dsio-core-api python3 -m pytest
+	$(PODMAN) exec -e DSIO_TEST_BASE_URL=https://gateway dsio-core-api python3 -m pytest
+
+# Tests unitaires seuls : ni base de données ni stack démarrée, utilisables
+# en pré-commit ou en CI sur un simple `pip install -r requirements.txt`.
+test-unit:
+	@echo "$(GREEN) Tests unitaires (sans infrastructure)...$(NC)"
+	$(PODMAN) exec dsio-core-api python3 -m pytest tests/test_unit_*.py
 
 # ==============================================================================
 # Règles de nettoyage

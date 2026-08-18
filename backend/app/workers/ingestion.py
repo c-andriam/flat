@@ -16,17 +16,18 @@ import logging
 from datetime import datetime, timezone
 
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
 
 from app.database import SessionLocal
 from app.models.project import (
     Action,
-    ActionStatus,
     Project,
     Responsable,
     SyncLog,
     SyncStatus,
-    action_responsables,
 )
+from app.services.action_rules import apply_status
+from app.services.events import publish_event_sync
 from app.services.excel_parser import parse_excel_file
 from app.workers.celery_app import app
 
@@ -47,10 +48,11 @@ def sync_project_file(self, project_id: str, file_path: str):
     db.add(sync_log)
     try:
         db.commit()
-    except Exception as e:
+    except Exception as exc:
         db.rollback()
+        db.close()
         logger.exception("Impossible de créer le SyncLog initial pour %s", project_id)
-        raise self.retry(exc=e, countdown=60)
+        raise self.retry(exc=exc, countdown=60)
 
     try:
         project = db.query(Project).filter(Project.id == project_id).first()
@@ -66,27 +68,26 @@ def sync_project_file(self, project_id: str, file_path: str):
 
         for row in parsed_actions:
             try:
-                _upsert_action(db, project, row)
+                # `_upsert_action` renvoie l'information création/mise à jour.
+                # Elle était auparavant redéduite par une requête exécutée
+                # *après* le commit : l'action existait alors toujours, et
+                # toute création était comptée comme une mise à jour — le
+                # rapport de synchronisation affichait systématiquement
+                # « 0 créées ».
+                was_created = _upsert_action(db, project, row)
                 db.commit()
-
-                # Déterminer si c'était une création ou une mise à jour
-                existing = (
-                    db.query(Action)
-                    .filter(Action.project_id == project.id, Action.numero == row["numero"])
-                    .first()
-                )
-                if existing:
-                    updated += 1
-                else:
+                if was_created:
                     created += 1
+                else:
+                    updated += 1
             except IntegrityError:
                 db.rollback()
                 errors += 1
-                logger.error("Erreur d'intégrité pour l'action %s", row.get("numero"))
-            except Exception as e:
+                logger.exception("Erreur d'intégrité pour l'action %s", row.get("numero"))
+            except Exception:
                 db.rollback()
                 errors += 1
-                logger.error("Erreur lors du traitement de l'action %s : %s", row.get("numero"), e)
+                logger.exception("Erreur lors du traitement de l'action %s", row.get("numero"))
 
         # 2. Mettre à jour le projet
         project.last_synced_at = datetime.now(timezone.utc)
@@ -96,12 +97,27 @@ def sync_project_file(self, project_id: str, file_path: str):
         sync_log.finished_at = datetime.now(timezone.utc)
         sync_log.status = SyncStatus.SUCCESS
         sync_log.files_processed = 1
+        if errors:
+            sync_log.error_message = f"{errors} ligne(s) en erreur, voir les logs du worker."
         db.commit()
 
         logger.info(
             "Sync terminée pour %s : %d créées, %d mises à jour, %d erreurs",
             project.code, created, updated, errors,
         )
+
+        # 4. Notifier les clients connectés (dashboard temps réel)
+        publish_event_sync(
+            "project_synced",
+            {
+                "project_id": str(project.id),
+                "code": project.code,
+                "created": created,
+                "updated": updated,
+                "errors": errors,
+            },
+        )
+
         return {
             "status": "success",
             "project_code": project.code,
@@ -110,84 +126,91 @@ def sync_project_file(self, project_id: str, file_path: str):
             "errors": errors,
         }
 
-    except Exception as e:
+    except Exception as exc:
         try:
             db.rollback()
             sync_log.finished_at = datetime.now(timezone.utc)
             sync_log.status = SyncStatus.FAILED
-            sync_log.error_message = str(e)[:500]
+            sync_log.error_message = str(exc)[:500]
             db.commit()
         except Exception:
             db.rollback()
             logger.exception("Impossible d'enregistrer l'échec du SyncLog pour %s", project_id)
         logger.exception("Sync échouée pour le projet %s", project_id)
-        raise self.retry(exc=e, countdown=60)
+        raise self.retry(exc=exc, countdown=60)
 
     finally:
         db.close()
 
 
-def _upsert_action(db, project: Project, row: dict):
-    """Crée ou met à jour une action à partir d'une ligne Excel parsée."""
+def _upsert_action(db, project: Project, row: dict) -> bool:
+    """Crée ou met à jour une action à partir d'une ligne Excel parsée.
+
+    Returns:
+        True si l'action a été créée, False si elle a été mise à jour.
+    """
     existing = (
         db.query(Action)
+        .options(selectinload(Action.responsables))
         .filter(Action.project_id == project.id, Action.numero == row["numero"])
         .first()
     )
 
-    if existing:
-        # Mise à jour des champs modifiables
-        existing.description = row["description"]
-        existing.resp_suivi = row["resp_suivi"]
-        existing.progress = row["progress"]
-        existing.spi = row["spi"]
-        existing.otd = row["otd"]
-        existing.deadline = row["deadline"]
-        existing.date_realisation = row["date_realisation"]
-        existing.charges_hj = row["charges_hj"]
-        existing.commentaire = row["commentaire"]
+    # La phase est déduite du numéro (P01-02-05 -> phase "02") et n'est
+    # conservée que si le projet est configuré en mode phases. Sans ça, les
+    # actions importées arrivaient toutes avec phase=NULL alors que leur
+    # numéro encodait une phase : la génération de numéro côté API repartait
+    # ensuite de zéro et entrait en collision avec l'existant.
+    phase = row.get("phase") if project.has_phases else None
 
-        # Mise à jour automatique du statut
-        if existing.progress >= 100.0:
-            existing.status = ActionStatus.TERMINE
-        elif existing.deadline and existing.deadline <= datetime.now(timezone.utc).date() and existing.progress < 100.0:
-            existing.status = ActionStatus.EN_RETARD
+    action = existing or Action(project_id=project.id, numero=row["numero"])
+    is_new = existing is None
 
-        # Synchroniser les responsables
-        _sync_responsables(db, existing, row["responsable_names"])
-    else:
-        # Création
-        action = Action(
-            project_id=project.id,
-            numero=row["numero"],
-            description=row["description"],
-            resp_suivi=row["resp_suivi"],
-            progress=row["progress"],
-            spi=row["spi"],
-            otd=row["otd"],
-            deadline=row["deadline"],
-            date_realisation=row["date_realisation"],
-            charges_hj=row["charges_hj"],
-            commentaire=row["commentaire"],
-        )
+    action.phase = phase
+    action.description = row["description"]
+    action.resp_suivi = row["resp_suivi"]
+    action.progress = row["progress"]
+    action.spi = row["spi"]
+    action.otd = row["otd"]
+    action.deadline = row["deadline"]
+    action.date_realisation = row["date_realisation"]
+    action.charges_hj = row["charges_hj"]
+    action.commentaire = row["commentaire"]
 
-        # Statut automatique
-        if action.progress >= 100.0:
-            action.status = ActionStatus.TERMINE
-        elif action.deadline and action.deadline <= datetime.now(timezone.utc).date():
-            action.status = ActionStatus.EN_RETARD
+    # Le fichier Excel fait autorité sur la date de réalisation (colonne J) :
+    # on recalcule le statut sans y toucher.
+    apply_status(action, manage_date_realisation=False)
 
+    if is_new:
         db.add(action)
         db.flush()  # Obtenir l'ID avant d'ajouter les responsables
 
-        _sync_responsables(db, action, row["responsable_names"])
+    _sync_responsables(db, action, row["responsable_names"])
+    return is_new
 
 
-def _sync_responsables(db, action: Action, names: list[str]):
-    """Synchronise la liste des responsables d'une action."""
-    action.responsables.clear()
+def _sync_responsables(db, action: Action, names: list[str]) -> None:
+    """Aligne la liste des responsables d'une action sur celle du fichier.
 
+    Le `clear()` systématique d'avant produisait un DELETE + INSERT de toutes
+    les associations à chaque synchronisation, même quand rien n'avait changé —
+    inutilement coûteux, et bruyant dans les journaux de réplication.
+    """
+    wanted = []
     for name in names:
+        name = (name or "").strip()
+        if name and name not in wanted:
+            wanted.append(name)
+
+    current = {resp.display_name: resp for resp in action.responsables}
+
+    for name in list(current):
+        if name not in wanted:
+            action.responsables.remove(current[name])
+
+    for name in wanted:
+        if name in current:
+            continue
         resp = db.query(Responsable).filter(Responsable.display_name == name).first()
         if not resp:
             resp = Responsable(display_name=name, is_mapped=False)

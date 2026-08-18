@@ -9,11 +9,13 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Table,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -29,6 +31,9 @@ action_responsables = Table(
     Base.metadata,
     Column("action_id", UUID(as_uuid=True), ForeignKey("actions.id", ondelete="CASCADE"), primary_key=True),
     Column("responsable_id", UUID(as_uuid=True), ForeignKey("responsables.id", ondelete="CASCADE"), primary_key=True),
+    # La cle primaire (action_id, responsable_id) ne sert que dans ce sens :
+    # « les actions d'un responsable » faisait un parcours complet de la table.
+    Index("ix_action_responsables_responsable_id", "responsable_id"),
 )
 
 
@@ -80,6 +85,14 @@ class Action(UUIDMixin, Base):
     __tablename__ = "actions"
     __table_args__ = (
         UniqueConstraint("project_id", "numero", name="uq_action_project_numero"),
+        # Index partiel dedie au filtre « actions en retard » : il ne porte que
+        # sur les actions ouvertes, donc reste petit meme quand l'historique
+        # des actions terminees grossit.
+        Index(
+            "ix_actions_open_deadline",
+            "deadline",
+            postgresql_where=text("progress < 100.0"),
+        ),
     )
 
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -92,11 +105,11 @@ class Action(UUIDMixin, Base):
     progress = Column(Float, default=0.0, nullable=False)      # F
     spi = Column(Float, default=0.0, nullable=False)          # G
     otd = Column(Float, default=0.0, nullable=False)          # H
-    deadline = Column(Date, nullable=True)                     # I
+    deadline = Column(Date, nullable=True, index=True)         # I
     date_realisation = Column(Date, nullable=True)             # J
     charges_hj = Column(Float, nullable=True)                  # K - Charges (h/j)
     commentaire = Column(Text, nullable=True)                  # L
-    status = Column(Enum(ActionStatus), default=ActionStatus.A_FAIRE, nullable=False)  # champ interne, pas dans le tableau Excel
+    status = Column(Enum(ActionStatus), default=ActionStatus.A_FAIRE, nullable=False, index=True)  # champ interne, pas dans le tableau Excel
 
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
@@ -120,7 +133,7 @@ class SyncStatus(str, enum.Enum):
 class SyncLog(UUIDMixin, Base):
     __tablename__ = "sync_logs"
 
-    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
     finished_at = Column(DateTime, nullable=True)
     status = Column(Enum(SyncStatus), default=SyncStatus.RUNNING, nullable=False)
     files_processed = Column(Integer, default=0, nullable=False)
@@ -134,7 +147,7 @@ class RelanceLog(UUIDMixin, Base):
     __tablename__ = "relance_logs"
 
     responsable_id = Column(UUID(as_uuid=True), ForeignKey("responsables.id", ondelete="CASCADE"), nullable=False, index=True)
-    sent_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    sent_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
     action_ids = Column(Text, nullable=False)
     email_status = Column(String(50), default="sent", nullable=False)
 

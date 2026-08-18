@@ -1,12 +1,17 @@
-import os
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 
+from app.config import settings
+from app.database import async_engine
+from app.logging_config import install_middlewares_and_handlers, setup_logging
 from app.routers import auth as auth_router
+from app.services.rate_limit import limiter
+
+logger = setup_logging("auth-api")
 
 tags_metadata = [
     {
@@ -23,6 +28,25 @@ tags_metadata = [
     },
 ]
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Échoue au démarrage plutôt qu'au premier login si la configuration
+    # d'authentification est incomplète ou si SECRET_KEY est resté à la
+    # valeur d'exemple : un conteneur qui refuse de démarrer se voit, un
+    # 500 sur /callback à 18 h se découvre bien plus tard.
+    _ = settings.secret_key
+    if not settings.bootstrap_admin_emails:
+        logger.warning(
+            "BOOTSTRAP_ADMIN_EMAILS n'est pas renseigné : aucun compte ne sera "
+            "promu administrateur automatiquement."
+        )
+    logger.info("auth-api démarré (env=%s)", settings.env)
+    yield
+    await async_engine.dispose()
+    logger.info("auth-api arrêté proprement")
+
+
 app = FastAPI(
     title="DSIO - Auth & Identity API",
     description=(
@@ -30,7 +54,7 @@ app = FastAPI(
         "Group). Émet les JWT applicatifs utilisés par les autres services "
         "(`core-api`, `realtime-hub`) après connexion via Microsoft Entra ID."
     ),
-    version="1.0.0",
+    version="1.1.0",
     contact={"name": "DSI - Trimeta Group"},
     openapi_tags=tags_metadata,
     swagger_ui_parameters={"defaultModelsExpandDepth": -1},
@@ -39,21 +63,26 @@ app = FastAPI(
     docs_url="/api/v1/auth/docs",
     redoc_url="/api/v1/auth/redoc",
     openapi_url="/api/v1/auth/openapi.json",
+    lifespan=lifespan,
 )
+
+install_middlewares_and_handlers(app, "auth-api")
+
 app.include_router(auth_router.router, prefix="/api/v1")
 
 # --- CORS ---
-FRONTEND_ORIGIN = os.getenv("FRONTEND_URL", "http://localhost:8080")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_ORIGIN],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
 
 # --- Rate Limiting ---
-limiter = Limiter(key_func=get_remote_address)
+# Le limiteur vient de app.services.rate_limit : c'est la même instance que
+# celle utilisée par les décorateurs de routers/auth.py, sinon les compteurs
+# sont indépendants et la limite annoncée n'est pas celle appliquée.
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 

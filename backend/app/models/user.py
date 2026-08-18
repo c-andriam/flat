@@ -2,7 +2,6 @@ import enum
 from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, Column, DateTime, Enum, String
-from sqlalchemy.orm import relationship
 
 from app.database import Base
 from app.models.base import UUIDMixin

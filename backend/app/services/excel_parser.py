@@ -13,19 +13,34 @@ Chaque fichier Excel respecte le format suivant (colonnes B à L) :
     J : Date réalisation
     K : Charges (h/j)
     L : Commentaire
+
+Les fichiers réels commencent par un bloc de titre (équipe projet, légende
+KPI) : la ligne d'en-tête n'est donc pas la ligne 1. Le parseur détecte
+automatiquement la première ligne de données à partir du motif des numéros
+d'action, au lieu de supposer `data_start_row=2`.
 """
 
 import logging
+import re
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 import openpyxl
+from openpyxl.utils import get_column_letter
 
 logger = logging.getLogger("excel-parser")
 
+# Un numéro d'action est fait de segments séparés par des tirets, dont le
+# dernier est numérique : « P01-01 », « P01-02-05 », « Po1 -02- 05 » dans les
+# fichiers saisis à la main.
+_NUMERO_RE = re.compile(r"^[A-Za-z0-9]+(?:\s*-\s*[A-Za-z0-9]+)+$")
 
-def _safe_float(value: Any, default: float = 0.0) -> float:
+# Nombre de lignes explorées pour trouver le début du tableau avant d'abandonner.
+_MAX_HEADER_SCAN = 60
+
+
+def _safe_float(value: Any, default: float | None = 0.0) -> float | None:
     """Convertit une valeur en float, retourne default en cas d'erreur."""
     if value is None:
         return default
@@ -33,6 +48,32 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (ValueError, TypeError):
         return default
+
+
+def _percent(cell) -> float:
+    """Avancement en pourcentage sur une échelle 0-100.
+
+    Excel stocke une cellule affichée « 100 % » sous la forme du nombre 1.0 :
+    lue telle quelle, une action terminée arrivait en base avec progress=1.0,
+    soit 1 % — toutes les actions closes ressortaient donc « à faire », et les
+    relances partaient sur des actions déjà livrées.
+    """
+    value = _safe_float(cell.value if cell is not None else None)
+    if value is None:
+        return 0.0
+    number_format = getattr(cell, "number_format", "") or ""
+    if "%" in number_format:
+        value *= 100.0
+    return max(0.0, min(100.0, value))
+
+
+def _ratio(cell) -> float:
+    """SPI / OTD : mêmes cellules en format pourcentage, même normalisation."""
+    value = _safe_float(cell.value if cell is not None else None) or 0.0
+    number_format = getattr(cell, "number_format", "") or ""
+    if "%" in number_format:
+        value *= 100.0
+    return value
 
 
 def _safe_date(value: Any) -> date | None:
@@ -43,32 +84,82 @@ def _safe_date(value: Any) -> date | None:
         return value.date()
     if isinstance(value, date):
         return value
-    try:
-        return datetime.strptime(str(value).strip(), "%d/%m/%Y").date()
-    except (ValueError, TypeError):
+    text = str(value).strip()
+    if not text:
         return None
+    # Les fichiers mélangent les saisies manuelles : 11/6/2023 (US, tel que
+    # rendu par Excel en locale EN) et 11/06/2023 (FR). On tente les deux,
+    # ordre US d'abord car c'est ce que produit l'export observé.
+    for fmt in ("%m/%d/%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d/%m/%y", "%m/%d/%y"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    logger.warning("Date non reconnue, ignorée : %r", text)
+    return None
 
 
 def _parse_responsables(value: Any) -> list[str]:
-    """Extrait la liste des responsables (séparés par '/' ou ',')."""
+    """Extrait la liste des responsables (séparés par '/', ',' ou '&')."""
     if not value:
         return []
     text = str(value).strip()
-    # Séparer par "/" ou ","
-    if "/" in text:
-        names = text.split("/")
-    elif "," in text:
-        names = text.split(",")
-    else:
-        names = [text]
-    return [n.strip() for n in names if n.strip()]
+    parts = re.split(r"[/,&]|\bet\b", text)
+    names = []
+    for part in parts:
+        part = part.strip()
+        if part and part not in names:
+            names.append(part)
+    return names
+
+
+def normalize_numero(raw: Any) -> str:
+    """Normalise un numéro d'action saisi à la main.
+
+    « Po1 -02- 05 » et « P01-02-05 » désignent la même action ; sans
+    normalisation la resynchronisation créait un doublon à chaque import.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    return "-".join(segment.strip() for segment in text.split("-") if segment.strip())
+
+
+def split_phase(numero: str) -> str | None:
+    """Phase encodée dans un numéro d'action à trois segments (P01-02-05)."""
+    segments = numero.split("-")
+    if len(segments) >= 3:
+        return segments[-2]
+    return None
+
+
+def _cell_value(cells: dict, letter: str):
+    cell = cells.get(letter)
+    return cell.value if cell is not None else None
+
+
+def _looks_like_action_row(cells: dict) -> bool:
+    numero = normalize_numero(_cell_value(cells, "B"))
+    description = str(_cell_value(cells, "C") or "").strip()
+    return bool(numero and description and _NUMERO_RE.match(numero))
+
+
+def _row_cells(row) -> dict:
+    """Indexe les cellules d'une ligne par lettre de colonne.
+
+    En mode `read_only`, openpyxl bouche les trous d'une ligne creuse avec des
+    `EmptyCell`, qui n'exposent ni `column_letter` ni `column` — l'ancien
+    `{cell.column_letter: cell for cell in row}` levait donc un AttributeError
+    dès qu'une ligne comportait une cellule vide en début de plage, c'est-à-dire
+    sur la quasi-totalité des fichiers réels. On se repère à la position.
+    """
+    return {get_column_letter(index): cell for index, cell in enumerate(row, start=1)}
 
 
 def parse_excel_file(
     file_path: str | Path,
     sheet_name: str | None = None,
-    header_row: int = 1,
-    data_start_row: int = 2,
+    data_start_row: int | None = None,
 ) -> list[dict]:
     """
     Parse un fichier Excel de suivi et retourne une liste de dictionnaires,
@@ -77,19 +168,19 @@ def parse_excel_file(
     Args:
         file_path: Chemin vers le fichier .xlsx
         sheet_name: Nom de la feuille (None = feuille active)
-        header_row: Ligne contenant les en-têtes (1-indexed)
-        data_start_row: Première ligne de données (1-indexed)
+        data_start_row: Première ligne de données (1-indexed). None = détection
+            automatique du début du tableau.
 
     Returns:
         Liste de dicts avec les clés :
-            numero, description, responsable_names, resp_suivi,
+            numero, phase, description, responsable_names, resp_suivi,
             progress, spi, otd, deadline, date_realisation,
             charges_hj, commentaire
     """
     path = Path(file_path)
     if not path.exists():
         raise FileNotFoundError(f"Fichier introuvable : {path}")
-    if not path.suffix.lower() in (".xlsx", ".xlsm"):
+    if path.suffix.lower() not in (".xlsx", ".xlsm"):
         raise ValueError(f"Format non supporté : {path.suffix} (attendu .xlsx ou .xlsm)")
     try:
         wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
@@ -104,45 +195,82 @@ def parse_excel_file(
         else:
             ws = wb.active
 
-        actions = []
+        actions: list[dict] = []
         skipped = 0
+        started = data_start_row is not None
+        first_data_row = data_start_row
 
-        for row in ws.iter_rows(min_row=data_start_row, values_only=False):
-            # Colonnes B(1) à L(11) — index 0-based dans la ligne
-            cells = {cell.column_letter: cell.value for cell in row}
+        for row in ws.iter_rows(min_row=data_start_row or 1):
+            if not row:
+                continue
+            cells = _row_cells(row)
+            row_index = next(
+                (cell.row for cell in row if getattr(cell, "row", None) is not None),
+                None,
+            )
+            if row_index is None:
+                continue
 
-            numero = str(cells.get("B", "") or "").strip()
-            description = str(cells.get("C", "") or "").strip()
+            if not started:
+                # Bloc de titre / légende : on avance jusqu'à la première
+                # ligne qui ressemble vraiment à une action.
+                if not _looks_like_action_row(cells):
+                    if row_index > _MAX_HEADER_SCAN:
+                        break
+                    continue
+                started = True
+                first_data_row = row_index
+
+            numero = normalize_numero(_cell_value(cells, "B"))
+            description = str(_cell_value(cells, "C") or "").strip()
 
             # Ignorer les lignes vides (pas de numéro ni de description)
             if not numero and not description:
                 skipped += 1
                 continue
 
-            if not description:
-                logger.warning("Ligne %s ignorée : numéro '%s' sans description", row[0].row, numero)
+            if not numero or not description:
+                logger.warning(
+                    "Ligne %s ignorée dans '%s' : numéro=%r description=%r incomplets",
+                    row_index, path.name, numero, description,
+                )
                 skipped += 1
                 continue
 
-            action = {
-                "numero": numero,
-                "description": description,
-                "responsable_names": _parse_responsables(cells.get("D")),
-                "resp_suivi": str(cells.get("E", "") or "").strip() or None,
-                "progress": _safe_float(cells.get("F")),
-                "spi": _safe_float(cells.get("G")),
-                "otd": _safe_float(cells.get("H")),
-                "deadline": _safe_date(cells.get("I")),
-                "date_realisation": _safe_date(cells.get("J")),
-                "charges_hj": _safe_float(cells.get("K"), default=None),
-                "commentaire": str(cells.get("L", "") or "").strip() or None,
-            }
-            actions.append(action)
+            # Ligne de total ou de sous-total en bas de tableau ("P01 - Cantine")
+            if not _NUMERO_RE.match(numero):
+                skipped += 1
+                continue
 
-        logger.info(
-            "Fichier '%s' parsé : %d actions extraites, %d lignes ignorées",
-            path.name, len(actions), skipped,
-        )
+            actions.append(
+                {
+                    "numero": numero,
+                    "phase": split_phase(numero),
+                    "description": description,
+                    "responsable_names": _parse_responsables(_cell_value(cells, "D")),
+                    "resp_suivi": str(_cell_value(cells, "E") or "").strip() or None,
+                    "progress": _percent(cells.get("F")),
+                    "spi": _ratio(cells.get("G")),
+                    "otd": _ratio(cells.get("H")),
+                    "deadline": _safe_date(_cell_value(cells, "I")),
+                    "date_realisation": _safe_date(_cell_value(cells, "J")),
+                    "charges_hj": _safe_float(_cell_value(cells, "K"), default=None),
+                    "commentaire": str(_cell_value(cells, "L") or "").strip() or None,
+                }
+            )
+
+        if not actions:
+            logger.warning(
+                "Aucune action reconnue dans '%s' : vérifier que le tableau "
+                "commence bien en colonne B avec des numéros de type P01-01.",
+                path.name,
+            )
+        else:
+            logger.info(
+                "Fichier '%s' parsé (tableau à partir de la ligne %s) : "
+                "%d actions extraites, %d lignes ignorées",
+                path.name, first_data_row, len(actions), skipped,
+            )
         return actions
     finally:
         wb.close()
