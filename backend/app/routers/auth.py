@@ -130,8 +130,24 @@ async def callback(
 
     db_result = await db.execute(select(User).filter(User.azure_object_id == azure_object_id))
     user = db_result.scalars().first()
-    is_new_user = user is None
-    if is_new_user:
+
+    if user is None:
+        # Rattachement par email : un compte peut avoir été pré-créé par un
+        # administrateur (scripts/issue_token.py) avec un identifiant local, ou
+        # avoir été recréé côté Entra ID avec un nouvel `oid`. Sans ce repli, on
+        # tentait d'insérer un second compte sur un email déjà pris — soit une
+        # erreur d'intégrité en pleine connexion. L'email vient d'un jeton signé
+        # par notre propre tenant, il fait donc autorité pour l'identification.
+        by_email = await db.execute(select(User).filter(User.email == email))
+        user = by_email.scalars().first()
+        if user is not None:
+            logger.info(
+                "Rattachement du compte existant %s à l'identité Entra ID %s",
+                email, azure_object_id,
+            )
+            user.azure_object_id = azure_object_id
+
+    if user is None:
         user = User(azure_object_id=azure_object_id, email=email, display_name=display_name)
         db.add(user)
     else:

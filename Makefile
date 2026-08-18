@@ -13,7 +13,7 @@ NC			= \033[0m
 # ==============================================================================
 # Règles principales
 # ==============================================================================
-.PHONY: all build up down start stop status logs clean fclean re migrate makemigrations db-update db-shell test test-unit
+.PHONY: all build up down start stop status logs clean fclean re migrate makemigrations db-update db-shell test test-unit token
 
 # Règle par défaut
 all: up
@@ -77,6 +77,24 @@ db-update: migrate
 db-shell:
 	@echo "$(YELLOW) Connexion à la base de données PostgreSQL (Supabase)...$(NC)"
 	$(PODMAN) run --rm -it --env-file .env --network dsio-internal-net postgres:16-alpine 		sh -c 'PGPASSWORD="$$POSTGRES_PASSWORD" psql -h "$$POSTGRES_HOST" -p "$${POSTGRES_PORT:-5432}" -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
+
+# ==============================================================================
+# Jeton d'accès (tests manuels via Swagger / curl / Postman)
+# ==============================================================================
+
+# Emet un JWT pour un compte donne, sans passer par le SSO Microsoft.
+# Indispensable tant que l'application Entra ID n'est pas configuree, puisque
+# toutes les routes metier exigent desormais un jeton.
+#   make token EMAIL=prenom.nom@trimeta.mg
+#   make token EMAIL=lecteur@trimeta.mg ROLE=lecteur
+ROLE ?= admin
+token:
+	@if [ -z "$(EMAIL)" ]; then \
+		echo "$(RED) EMAIL est requis.$(NC)"; \
+		echo "   exemple : make token EMAIL=prenom.nom@trimeta.mg"; \
+		exit 1; \
+	fi
+	@$(PODMAN) exec dsio-core-api python3 scripts/issue_token.py "$(EMAIL)" --role "$(ROLE)"
 
 # ==============================================================================
 # Tests automatisés
