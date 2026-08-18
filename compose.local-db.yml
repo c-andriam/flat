@@ -1,0 +1,97 @@
+# =============================================================================
+# Base PostgreSQL locale — surcouche optionnelle de compose.yml
+#
+#     make up-local        démarre la stack avec une base dans un conteneur
+#     make up              démarre la stack normale (Supabase)
+#
+# À quoi ça sert : travailler quand Supabase est injoignable (projet en pause,
+# supprimé, coupure réseau) ou développer sans toucher aux données réelles.
+# Aucune valeur ici n'est un secret : cette base ne sort jamais du réseau
+# interne du conteneur et n'est pas exposée sur l'hôte.
+#
+# Les variables définies dans `environment` l'emportent sur celles du
+# `env_file: .env` — les services pointent donc vers `postgres` au lieu de
+# l'hôte Supabase, sans modifier le .env.
+# =============================================================================
+
+x-local-db-env: &local-db-env
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: dsio
+  POSTGRES_PASSWORD: dsio-local-dev
+  POSTGRES_DB: dsio
+  # Une instance locale n'a pas de certificat TLS : `require` ferait échouer
+  # toute connexion. La valeur reste `require` par défaut pour Supabase.
+  DB_SSL_MODE: disable
+  APP_ENV: dev
+  COOKIE_SECURE: "false"
+
+volumes:
+  postgres_data:
+    name: dsio_postgres_local_data
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: dsio-postgres-local
+    restart: always
+    environment:
+      POSTGRES_USER: dsio
+      POSTGRES_PASSWORD: dsio-local-dev
+      POSTGRES_DB: dsio
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - dsio-internal-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dsio -d dsio"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  core-api:
+    environment: *local-db-env
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  auth-api:
+    environment: *local-db-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  realtime-hub:
+    environment: *local-db-env
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  worker-ingestion:
+    environment: *local-db-env
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  worker-writeback:
+    environment: *local-db-env
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  scheduler-notifications:
+    environment: *local-db-env
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy

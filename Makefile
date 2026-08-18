@@ -13,7 +13,7 @@ NC			= \033[0m
 # ==============================================================================
 # Règles principales
 # ==============================================================================
-.PHONY: all build up down start stop status logs clean fclean re migrate makemigrations db-update db-shell test test-unit token doctor
+.PHONY: all build up down start stop status logs clean fclean re migrate makemigrations db-update db-shell test test-unit token doctor up-local down-local migrate-local
 
 # Règle par défaut
 all: up
@@ -77,6 +77,33 @@ db-update: migrate
 db-shell:
 	@echo "$(YELLOW) Connexion à la base de données PostgreSQL (Supabase)...$(NC)"
 	$(PODMAN) run --rm -it --env-file .env --network dsio-internal-net postgres:16-alpine sh -c 'PGPASSWORD="$$POSTGRES_PASSWORD" psql -h "$$POSTGRES_HOST" -p "$${POSTGRES_PORT:-5432}" -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
+
+# ==============================================================================
+# Base de donnees locale (developpement hors Supabase)
+# ==============================================================================
+
+LOCAL_DB = -f compose.yml -f compose.local-db.yml
+
+# Demarre la stack avec un PostgreSQL en conteneur au lieu de Supabase.
+# Utile quand le projet Supabase est en pause, supprime, ou pour developper
+# sans toucher aux donnees reelles.
+up-local:
+	@echo "$(GREEN) Demarrage avec une base PostgreSQL locale...$(NC)"
+	$(COMPOSE) $(LOCAL_DB) up -d
+	@echo "$(YELLOW) Attente de la base, puis migrations...$(NC)"
+	@sleep 8
+	@$(MAKE) --no-print-directory migrate-local
+	@echo "$(GREEN) Pret. Creez un compte : make token EMAIL=vous@trimetagroup.mg$(NC)"
+
+# Applique les migrations sur la base locale.
+migrate-local:
+	$(PODMAN) exec dsio-core-api alembic upgrade head
+
+# Arrete la stack locale. Le volume de donnees survit : pour repartir de zero,
+# ajouter `podman volume rm dsio_postgres_local_data`.
+down-local:
+	@echo "$(RED) Arret de la stack locale...$(NC)"
+	$(COMPOSE) $(LOCAL_DB) down
 
 # ==============================================================================
 # Diagnostic

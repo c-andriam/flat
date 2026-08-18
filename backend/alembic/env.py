@@ -8,6 +8,7 @@ from sqlalchemy import engine_from_config, pool
 # Permet d'importer "app.*" quand alembic est lancé depuis backend/
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from app.config import settings  # noqa: E402
 from app.database import SQLALCHEMY_DATABASE_URL, Base  # noqa: E402
 from app import models  # noqa: E402,F401  (enregistre tous les modèles sur Base.metadata)
 
@@ -31,7 +32,7 @@ def get_database_url() -> str:
     transmet pas les `connect_args` du moteur applicatif.
     """
     separator = "&" if "?" in SQLALCHEMY_DATABASE_URL else "?"
-    return f"{SQLALCHEMY_DATABASE_URL}{separator}sslmode=require"
+    return f"{SQLALCHEMY_DATABASE_URL}{separator}sslmode={settings.db_ssl_mode}"
 
 
 def run_migrations_offline() -> None:

@@ -32,13 +32,13 @@ _POOL_KWARGS = {
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
-    connect_args={"sslmode": "require"},
+    connect_args={"sslmode": settings.db_ssl_mode},
     **_POOL_KWARGS,
 )
 
 async_engine = create_async_engine(
     SQLALCHEMY_DATABASE_URL_ASYNC,
-    connect_args={"ssl": "require"},
+    connect_args={"ssl": settings.db_ssl_mode},
     **_POOL_KWARGS,
 )
 

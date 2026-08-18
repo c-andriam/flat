@@ -81,6 +81,11 @@ class Settings:
     db_pool_size: int = _int("DB_POOL_SIZE", 5)
     db_max_overflow: int = _int("DB_MAX_OVERFLOW", 5)
     db_pool_recycle: int = _int("DB_POOL_RECYCLE", 1800)
+    # `require` par defaut : Supabase impose TLS. Une instance PostgreSQL
+    # locale de developpement n'a pas de certificat, d'ou `disable` — la
+    # valeur etait codee en dur, ce qui rendait tout travail hors ligne
+    # impossible.
+    db_ssl_mode: str = os.getenv("DB_SSL_MODE", "require").strip().lower()
     db_echo: bool = _bool("DB_ECHO", False)
 
     # --- Redis ---

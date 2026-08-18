@@ -59,6 +59,51 @@ def section(title: str) -> None:
     print(f"--- {title} " + "-" * max(0, 58 - len(title)))
 
 
+def _resolves(host: str) -> bool:
+    try:
+        socket.getaddrinfo(host, None)
+        return True
+    except socket.gaierror:
+        return False
+
+
+def _diagnose_tenant(settings) -> str:
+    """Explique un ENOTFOUND du pooler Supabase, par ordre de probabilité.
+
+    Attention au faux ami : le domaine d'API du projet (`<ref>.supabase.co`)
+    ne résout PAS quand le projet est en pause, exactement comme lorsqu'il a
+    été supprimé. Le DNS ne permet donc pas de distinguer les deux — conclure
+    « projet supprimé » sur cette base amènerait à en recréer un et à perdre
+    des données encore parfaitement récupérables.
+    """
+    user = settings.postgres_user
+    if "." not in user:
+        return (
+            "POSTGRES_USER devrait avoir la forme postgres.<reference-projet> "
+            "pour une connexion via le pooler Supabase."
+        )
+
+    ref = user.split(".", 1)[1]
+    domaine = "résout" if _resolves(f"{ref}.supabase.co") else "ne résout pas"
+
+    return (
+        f"Le pooler ne connaît pas le tenant {ref}. Par ordre de probabilité :\n"
+        "            1. LE PROJET EST EN PAUSE. C'est de loin le cas le plus\n"
+        "               fréquent : l'offre gratuite suspend un projet inactif.\n"
+        "               -> https://supabase.com/dashboard, ouvrir le projet et\n"
+        "                  cliquer sur « Restore » / « Resume ». Rien d'autre\n"
+        "                  n'est à changer, ni ici ni dans .env.\n"
+        "            2. POSTGRES_HOST vise la mauvaise région (le pooler résout\n"
+        "               le tenant d'après sa région).\n"
+        "            3. La référence du projet a changé (projet recréé).\n"
+        f"            Pour information, {ref}.supabase.co {domaine} — mais ce\n"
+        "            signal ne départage rien : le domaine d'un projet en pause\n"
+        "            ne résout pas davantage que celui d'un projet supprimé.\n"
+        "            Ne recréez un projet qu'après avoir constaté sur le tableau\n"
+        "            de bord qu'il n'y en a effectivement plus."
+    )
+
+
 def main() -> int:
     print()
     print("=" * 64)
@@ -147,17 +192,7 @@ def main() -> int:
     except Exception as exc:
         message = str(exc).strip().splitlines()[0] if str(exc).strip() else exc.__class__.__name__
         if "Tenant or user not found" in str(exc) or "ENOTFOUND" in str(exc):
-            fail(
-                f"Supabase refuse l'identifiant : {message}",
-                "Le pooler ne trouve pas ce projet. Trois causes, à vérifier\n"
-                "            dans cet ordre sur https://supabase.com/dashboard :\n"
-                "            1. le projet est en pause (offre gratuite) -> le relancer ;\n"
-                "            2. POSTGRES_HOST ne correspond pas à la région du projet\n"
-                "               (le pooler identifie le tenant d'après la région) ;\n"
-                "            3. la référence du projet dans POSTGRES_USER\n"
-                "               (postgres.<ref>) ne correspond plus au projet.\n"
-                "            Copier la chaîne « Connection pooling » du tableau de bord.",
-            )
+            fail(f"Supabase refuse l'identifiant : {message}", _diagnose_tenant(settings))
         elif "password authentication failed" in str(exc):
             fail(
                 "Mot de passe refusé par PostgreSQL.",
