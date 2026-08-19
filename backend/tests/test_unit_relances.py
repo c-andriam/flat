@@ -52,13 +52,13 @@ def test_toutes_les_vues_compilent():
         assert _sql(view)
 
 
-def test_retard_et_echeance_proche_sont_disjoints():
-    """Sans cette disjonction, une même action déclencherait deux emails :
-    la relance « en retard » et le rappel « échéance proche »."""
-    retard = _sql(ActionView.OVERDUE)
-    proche = _sql(ActionView.DUE_SOON)
-    assert "deadline <= '2026-08-18'" in retard
-    assert "deadline > '2026-08-18'" in proche
+def test_les_trois_vues_datees_sont_disjointes():
+    """Une action ouverte à échéance datée tombe dans une seule des vues
+    `overdue` / `today` / `due_soon`. Sans cette partition, un responsable
+    recevrait deux emails pour la même ligne."""
+    assert "deadline < '2026-08-18'" in _sql(ActionView.OVERDUE)
+    assert "deadline = '2026-08-18'" in _sql(ActionView.TODAY)
+    assert "deadline > '2026-08-18'" in _sql(ActionView.DUE_SOON)
 
 
 def test_vue_ouverte_croise_statut_et_avancement():

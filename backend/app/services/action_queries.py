@@ -68,13 +68,17 @@ def _open():
 
 
 def is_overdue(today: date | None = None):
-    """Échéance atteinte et action non terminée.
+    """Échéance dépassée et action non terminée.
 
-    Le seuil est `deadline <= today`, cohérent avec `Action.is_overdue` : une
-    action due aujourd'hui et non faite compte comme en retard.
+    Le retard commence le lendemain de l'échéance : livrer le jour J compte
+    comme tenu — c'est déjà la règle appliquée par l'OTD, sur 108 actions de
+    la base — donc ne pas avoir fini le jour J n'est pas encore un retard.
+    Cette borne rend `/actions/overdue` et `/actions/today` strictement
+    disjointes : chaque action ouverte à échéance datée tombe dans une seule
+    des trois vues `overdue` / `today` / `due_soon`.
     """
     today = today or today_utc()
-    return and_(Action.deadline.isnot(None), Action.deadline <= today, _open())
+    return and_(Action.deadline.isnot(None), Action.deadline < today, _open())
 
 
 def is_due_today(today: date | None = None):

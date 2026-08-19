@@ -161,7 +161,7 @@ def check_and_send(self, kind: str = RelanceKind.OVERDUE.value):
 
 @app.task(name="app.workers.notifications.mark_overdue_actions")
 def mark_overdue_actions():
-    """Bascule en `EN_RETARD` les actions dont l'échéance est atteinte.
+    """Bascule en `EN_RETARD` les actions dont l'échéance est dépassée.
 
     Le statut n'était recalculé qu'à l'écriture (API ou import Excel) : une
     action créée en avance et jamais retouchée restait « à faire » des mois
@@ -179,7 +179,11 @@ def mark_overdue_actions():
             db.query(Action)
             .filter(
                 Action.deadline.isnot(None),
-                Action.deadline <= today,
+                # Strictement antérieure : le jour de l'échéance, l'action a
+                # encore sa journée. Le beat tourne à 7 h 45, il basculerait
+                # sinon des actions que leur responsable a jusqu'au soir pour
+                # livrer.
+                Action.deadline < today,
                 Action.progress < 100.0,
                 Action.status.notin_(
                     [ActionStatus.EN_RETARD, ActionStatus.TERMINE, ActionStatus.BLOQUE]

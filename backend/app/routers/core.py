@@ -408,7 +408,7 @@ async def _run_actions_query(db: AsyncSession, response: Response, stmt, limit: 
         "relances et les rapports, afin qu'un mail et un tableau de bord ne "
         "puissent jamais compter des actions différentes :\n\n"
         "- `open` : non terminées ;\n"
-        "- `overdue` : échéance atteinte et non terminées ;\n"
+        "- `overdue` : échéance dépassée (la veille au plus tard) et non terminées ;\n"
         "- `today` : à rendre aujourd'hui ;\n"
         "- `due_soon` : échéance dans les `due_soon_days` jours (aujourd'hui exclu) ;\n"
         "- `upcoming` : échéance dans la semaine décalée de `weeks_ahead` ;\n"
@@ -550,7 +550,9 @@ _VUES_RACCOURCIES = [
     ("open", ActionView.OPEN, "Actions ouvertes",
      "Toutes les actions non terminées, tous projets actifs confondus."),
     ("overdue", ActionView.OVERDUE, "Actions en retard",
-     "Échéance atteinte ou dépassée et avancement inférieur à 100 %."),
+     "Échéance dépassée et avancement inférieur à 100 %. Le jour de "
+     "l'échéance, l'action relève de `/actions/today` : elle a encore sa "
+     "journée pour être livrée. Les deux vues sont donc disjointes."),
     ("today", ActionView.TODAY, "Actions à rendre aujourd'hui",
      "Échéance au jour même — la liste du rappel « jour J »."),
     ("due-soon", ActionView.DUE_SOON, "Actions dont l'échéance approche",
@@ -708,7 +710,7 @@ async def create_action(payload: ActionCreate, db: AsyncSession = Depends(get_as
         "l'avancement et des dates :\n\n"
         "- `progress` à 100 bascule `status` sur `termine` et renseigne "
         "`date_realisation` au jour même ;\n"
-        "- une échéance atteinte sans achèvement bascule sur `en_retard` ;\n"
+        "- une échéance dépassée sans achèvement bascule sur `en_retard` ;\n"
         "- `spi` suit l'avancement (objectif : 100 % à l'échéance) ;\n"
         "- `otd` vaut 100 si l'action est livrée au plus tard à son échéance, "
         "0 sinon ou tant qu'elle n'est pas livrée.\n\n"

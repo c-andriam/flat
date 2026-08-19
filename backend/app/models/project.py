@@ -145,8 +145,14 @@ class Action(UUIDMixin, Base):
     responsables = relationship("Responsable", secondary=action_responsables, back_populates="actions")  # D
 
     def is_overdue(self, today: date | None = None) -> bool:
+        """Échéance dépassée et action non terminée.
+
+        Le retard commence le lendemain de l'échéance : livrer le jour J
+        compte comme tenu du point de vue de l'OTD, donc ne pas avoir fini
+        le jour J n'est pas encore un retard.
+        """
         today = today or datetime.now(timezone.utc).date()
-        return self.deadline is not None and self.deadline <= today and self.progress < 100.0
+        return self.deadline is not None and self.deadline < today and self.progress < 100.0
 
     def __repr__(self) -> str:
         return f"<Action id={self.id} numero={self.numero!r} progress={self.progress}>"

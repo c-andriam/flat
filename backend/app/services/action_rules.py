@@ -8,7 +8,10 @@ changeait donc de statut selon qu'elle était modifiée à la main ou
 resynchronisée depuis Excel.
 
 La règle « en retard » reprend celle déjà portée par `Action.is_overdue` :
-échéance atteinte (`deadline <= aujourd'hui`) et avancement < 100 %.
+échéance dépassée (`deadline < aujourd'hui`) et avancement < 100 %. Le
+jour de l'échéance, l'action n'est pas encore en retard : elle a la
+journée pour être livrée, cohérence avec l'OTD qui compte une livraison
+le jour J comme tenue.
 """
 
 from datetime import date, datetime, timezone
@@ -38,7 +41,7 @@ def compute_status(
         # l'action n'avance pas. Le retard reste visible par la date, que le
         # filtre `overdue` calcule sur `deadline` et non sur le statut.
         return ActionStatus.BLOQUE
-    if deadline is not None and deadline <= today:
+    if deadline is not None and deadline < today:
         return ActionStatus.EN_RETARD
     if current in (ActionStatus.EN_COURS, ActionStatus.A_FAIRE):
         # Statut positionné à la main : on ne l'écrase pas.

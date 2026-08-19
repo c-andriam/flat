@@ -34,10 +34,16 @@ def test_cent_pourcent_donne_termine():
     assert compute_status(100.0, FUTUR, ActionStatus.EN_COURS, TODAY) is ActionStatus.TERMINE
 
 
-def test_echeance_atteinte_donne_en_retard():
+def test_echeance_depassee_donne_en_retard():
     assert compute_status(40.0, PASSE, ActionStatus.EN_COURS, TODAY) is ActionStatus.EN_RETARD
-    # Le jour même compte comme un retard, cohérent avec Action.is_overdue.
-    assert compute_status(40.0, TODAY, ActionStatus.A_FAIRE, TODAY) is ActionStatus.EN_RETARD
+
+
+def test_le_jour_de_l_echeance_n_est_pas_un_retard():
+    """L'action a sa journée pour être livrée : c'est déjà la règle de l'OTD,
+    qui compte une livraison le jour J comme tenue. `/actions/today` et
+    `/actions/overdue` restent ainsi strictement disjointes."""
+    assert compute_status(40.0, TODAY, ActionStatus.EN_COURS, TODAY) is ActionStatus.EN_COURS
+    assert compute_status(0.0, TODAY, ActionStatus.A_FAIRE, TODAY) is ActionStatus.A_FAIRE
 
 
 def test_termine_prime_sur_le_retard():
