@@ -45,7 +45,7 @@ VIEW_LABELS: dict[ActionView, str] = {
     ActionView.TODAY: "Actions à échéance aujourd'hui",
     ActionView.DUE_SOON: "Actions dont l'échéance approche",
     ActionView.UPCOMING: "Actions à venir",
-    ActionView.IN_PROGRESS: "Actions en cours",
+    ActionView.IN_PROGRESS: "Actions entamees",
     ActionView.BLOCKED: "Actions bloquées",
     ActionView.DONE: "Actions terminées",
     ActionView.UNASSIGNED: "Actions sans responsable",
@@ -101,6 +101,32 @@ def is_due_soon(days: int = 3, today: date | None = None):
     )
 
 
+def is_in_progress():
+    """Action entamee mais pas terminee.
+
+    Defini sur l'avancement, pas sur le statut. Le statut est une valeur
+    unique : une action a 95 % dont l'echeance est passee porte `en_retard`,
+    car c'est l'information la plus urgente — elle disparaissait alors de la
+    vue « en cours » alors qu'elle est bel et bien en cours. Sur le
+    portefeuille, les onze actions entamees etaient toutes dans ce cas et la
+    vue renvoyait une liste vide.
+
+    Le statut `en_cours` reste pris en compte : un chef de projet peut
+    declarer un travail demarre avant d'avoir chiffre son avancement.
+
+    Cette vue recoupe volontairement `overdue` — une action peut etre entamee
+    *et* en retard. Seules les trois vues de temps (`overdue`, `today`,
+    `due_soon`) forment une partition.
+    """
+    return and_(
+        or_(
+            and_(Action.progress > 0.0, Action.progress < 100.0),
+            Action.status == ActionStatus.EN_COURS,
+        ),
+        _open(),
+    )
+
+
 def week_bounds(weeks_ahead: int = 1, today: date | None = None) -> tuple[date, date]:
     """Lundi et dimanche de la semaine décalée de `weeks_ahead`.
 
@@ -133,7 +159,7 @@ def _view_condition(view: ActionView, today: date, days: int, weeks_ahead: int):
     if view is ActionView.UPCOMING:
         return is_upcoming(weeks_ahead, today)
     if view is ActionView.IN_PROGRESS:
-        return and_(Action.status == ActionStatus.EN_COURS, _open())
+        return is_in_progress()
     if view is ActionView.BLOCKED:
         return Action.status == ActionStatus.BLOQUE
     if view is ActionView.DONE:

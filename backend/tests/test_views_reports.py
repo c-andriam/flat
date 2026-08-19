@@ -37,6 +37,87 @@ def test_chaque_vue_repond(api, vue):
     assert "X-Total-Count" in resp.headers
 
 
+def test_chaque_vue_est_coherente_avec_le_summary(api):
+    """`/actions/summary` doit donner exactement les memes totaux que les
+    routes individuelles : un tableau de bord affiche l'un et navigue vers
+    l'autre, un ecart se verrait immediatement."""
+    compteurs = api.get("/actions/summary?active_projects_only=false").json()["counts"]
+    correspondance = {
+        "open": "open", "overdue": "overdue", "today": "today",
+        "due-soon": "due_soon", "upcoming": "upcoming", "in-progress": "in_progress",
+        "blocked": "blocked", "done": "done", "unassigned": "unassigned",
+        "no-deadline": "no_deadline",
+    }
+    for chemin, cle in correspondance.items():
+        resp = api.get(f"/actions/{chemin}?active_projects_only=false&limit=1")
+        assert resp.status_code == 200, f"/actions/{chemin} -> {resp.status_code}"
+        total = int(resp.headers["X-Total-Count"])
+        assert total == compteurs[cle], (
+            f"/actions/{chemin} annonce {total}, summary annonce {compteurs[cle]}"
+        )
+
+
+def test_les_trois_vues_de_temps_sont_disjointes(api, test_project):
+    """Une action ouverte a echeance datee doit tomber dans une seule vue.
+    Sans cette partition, un responsable recevrait deux relances pour elle."""
+    ensembles = {}
+    for vue in ("overdue", "today", "due-soon"):
+        resp = api.get(f"/actions/{vue}?active_projects_only=false&limit=1000")
+        ensembles[vue] = {a["id"] for a in resp.json()}
+    assert not (ensembles["overdue"] & ensembles["today"])
+    assert not (ensembles["overdue"] & ensembles["due-soon"])
+    assert not (ensembles["today"] & ensembles["due-soon"])
+
+
+def test_action_entamee_apparait_dans_in_progress(api, test_project):
+    """Regression : la vue filtrait sur `status = en_cours`, or une action
+    entamee dont l'echeance est passee porte `en_retard`. Elle etait donc
+    invisible de « entamees »."""
+    cree = api.post("/actions", json=_action(test_project["id"], deadline="2020-01-01")).json()
+    api.put(f"/actions/{cree['id']}", json={"progress": 45})
+
+    entamees = api.get(f"/actions/in-progress?project_id={test_project['id']}&active_projects_only=false").json()
+    assert cree["numero"] in [a["numero"] for a in entamees]
+
+    # Et elle reste bien signalee en retard : les deux vues se recoupent.
+    retards = api.get(f"/actions/overdue?project_id={test_project['id']}&active_projects_only=false").json()
+    assert cree["numero"] in [a["numero"] for a in retards]
+
+
+def test_action_non_commencee_absente_de_in_progress(api, test_project):
+    cree = api.post("/actions", json=_action(test_project["id"])).json()
+    entamees = api.get(f"/actions/in-progress?project_id={test_project['id']}&active_projects_only=false").json()
+    assert cree["numero"] not in [a["numero"] for a in entamees]
+
+
+def test_action_terminee_absente_de_in_progress(api, test_project):
+    cree = api.post("/actions", json=_action(test_project["id"])).json()
+    api.put(f"/actions/{cree['id']}", json={"progress": 100})
+    entamees = api.get(f"/actions/in-progress?project_id={test_project['id']}&active_projects_only=false").json()
+    assert cree["numero"] not in [a["numero"] for a in entamees]
+
+
+def test_pagination_pages_disjointes(api):
+    p1 = api.get("/actions?limit=5&offset=0&active_projects_only=false").json()
+    p2 = api.get("/actions?limit=5&offset=5&active_projects_only=false").json()
+    assert not ({a["id"] for a in p1} & {a["id"] for a in p2})
+
+
+def test_tri_par_echeance_croissante(api):
+    actions = api.get("/actions?limit=50&active_projects_only=false").json()
+    echeances = [a["deadline"] for a in actions if a["deadline"]]
+    assert echeances == sorted(echeances)
+
+
+def test_limit_hors_bornes_rejete(api):
+    assert api.get("/actions?limit=0").status_code == 422
+    assert api.get("/actions?limit=99999").status_code == 422
+
+
+def test_action_id_invalide_rejete(api):
+    assert api.get("/actions/pas-un-uuid").status_code == 422
+
+
 def test_vue_inconnue_rejetee(api):
     resp = api.get("/actions?view=nimportequoi")
     assert resp.status_code == 422

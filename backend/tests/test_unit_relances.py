@@ -82,6 +82,26 @@ def test_projets_archives_exclus_sur_demande():
     assert "is_active" not in _sql(ActionView.OPEN, active_projects_only=False)
 
 
+def test_entamee_definie_sur_l_avancement_pas_sur_le_statut():
+    """Le statut est une valeur unique : une action a 95 % dont l'echeance est
+    passee porte `en_retard`. Definie sur le seul statut, la vue « entamees »
+    renvoyait une liste vide alors que onze actions du portefeuille etaient
+    bel et bien commencees."""
+    sql = _sql(ActionView.IN_PROGRESS)
+    assert "progress > 0.0" in sql
+    assert "progress < 100.0" in sql
+    # Le statut declare a la main reste pris en compte.
+    assert "status = 'EN_COURS'" in sql
+
+
+def test_entamee_recoupe_volontairement_en_retard():
+    """Contrairement aux trois vues de temps, `in_progress` n'est pas exclusif :
+    une action peut être entamée *et* en retard. Son filtre ne porte donc sur
+    aucune date."""
+    where = _sql(ActionView.IN_PROGRESS).split("WHERE", 1)[1]
+    assert "deadline" not in where
+
+
 def test_bloquees_non_filtrees_sur_l_avancement():
     """Une action bloquée reste listée quel que soit son avancement : c'est
     le blocage qu'on veut voir, pas son pourcentage."""

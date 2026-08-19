@@ -557,8 +557,13 @@ _VUES_RACCOURCIES = [
     ("upcoming", ActionView.UPCOMING, "Actions de la semaine à venir",
      "Échéance comprise dans la semaine décalée de `weeks_ahead` "
      "(0 = semaine courante, 1 = semaine prochaine)."),
-    ("in-progress", ActionView.IN_PROGRESS, "Actions en cours",
-     "Actions dont le statut a été positionné à `en_cours`."),
+    ("in-progress", ActionView.IN_PROGRESS, "Actions entamées",
+     "Actions dont le travail a commencé sans être terminé : avancement "
+     "strictement entre 0 et 100, ou statut `en_cours` déclaré à la main. "
+     "Défini sur l'avancement et non sur le seul statut : celui-ci est une "
+     "valeur unique, et une action à 95 % dont l'échéance est passée porte "
+     "`en_retard`. Cette vue recoupe donc volontairement `/actions/overdue` — "
+     "une action peut être entamée *et* en retard."),
     ("blocked", ActionView.BLOCKED, "Actions bloquées",
      "Actions marquées `bloque`. Ce statut est conservé tel quel par le "
      "recalcul automatique : un blocage est un constat humain, l'écraser en "
