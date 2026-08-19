@@ -653,15 +653,7 @@ async def create_action(payload: ActionCreate, db: AsyncSession = Depends(get_as
     for attempt in range(1, max_attempts + 1):
         generated_numero = await _generate_numero(db, project, phase)
         action = Action(**data, numero=generated_numero, phase=phase)
-        # SPI et OTD ne sont recalculés que si l'appelant ne les a pas fournis
-        # explicitement : leurs valeurs par défaut (0.0) ne se distinguent pas
-        # d'une saisie volontaire autrement que par `model_fields_set`.
-        fournis = payload.model_fields_set
-        apply_indicators(
-            action,
-            recompute_spi="spi" not in fournis,
-            recompute_otd="otd" not in fournis,
-        )
+        apply_indicators(action)
 
         # Les responsables sont rattachés AVANT `db.add` : tant que l'action
         # est hors session, SQLAlchemy ne propage pas l'association vers
@@ -716,8 +708,10 @@ async def create_action(payload: ActionCreate, db: AsyncSession = Depends(get_as
         "- `spi` suit l'avancement (objectif : 100 % à l'échéance) ;\n"
         "- `otd` vaut 100 si l'action est livrée au plus tard à son échéance, "
         "0 sinon ou tant qu'elle n'est pas livrée.\n\n"
-        "Fournir explicitement `status`, `spi` ou `otd` force la valeur "
-        "correspondante et désactive son recalcul.\n\n"
+        "`spi` et `otd` sont calculés par le serveur et refusés en écriture "
+        "(422) : les faire évoluer passe par `progress`, `deadline` ou "
+        "`date_realisation`. `status` accepte `a_faire`, `en_cours` et "
+        "`bloque` ; `termine` et `en_retard` se déduisent.\n\n"
         "`responsable_names` remplace la liste des responsables ; absent, "
         "elle est conservée."
     ),
@@ -776,18 +770,14 @@ async def update_action(
     # l'appelant en impose un explicitement — un chef de projet doit pouvoir
     # corriger une valeur sans que l'enregistrement suivant l'écrase.
     if "status" in update_data:
-        # Statut forcé : on ne recalcule que les indicateurs chiffrés.
-        action.spi = action.spi if "spi" in update_data else compute_spi(action.progress)
-        if "otd" not in update_data:
-            action.otd = compute_otd(
-                action.progress, action.deadline, action.date_realisation
-            )
+        # Statut imposé (`bloque`, `en_cours`, `a_faire`) : il est conservé,
+        # mais les indicateurs chiffrés restent dérivés des données.
+        action.spi = compute_spi(action.progress)
+        action.otd = compute_otd(action.progress, action.deadline, action.date_realisation)
     else:
         apply_indicators(
             action,
             manage_date_realisation="date_realisation" not in update_data,
-            recompute_spi="spi" not in update_data,
-            recompute_otd="otd" not in update_data,
         )
 
     try:

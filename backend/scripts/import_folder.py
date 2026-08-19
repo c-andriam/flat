@@ -143,17 +143,33 @@ def main() -> int:
                         projet.has_phases = True
                 db.commit()
 
-                for action in lecture.actions:
-                    try:
+                # Un commit par projet, pas par action : chaque commit est un
+                # aller-retour vers Supabase, et 575 d'entre eux mettaient
+                # l'import à genoux. En cas d'échec, on rejoue le projet
+                # action par action pour isoler la ligne fautive.
+                try:
+                    for action in lecture.actions:
                         if _upsert_action(db, projet, action):
                             crees += 1
                         else:
                             maj += 1
-                        db.commit()
-                    except Exception as exc:
-                        db.rollback()
-                        erreurs += 1
-                        alertes.append((code, f"action {action.numero} : {exc.__class__.__name__}"))
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                    crees = maj = 0
+                    for action in lecture.actions:
+                        try:
+                            if _upsert_action(db, projet, action):
+                                crees += 1
+                            else:
+                                maj += 1
+                            db.commit()
+                        except Exception as exc:
+                            db.rollback()
+                            erreurs += 1
+                            alertes.append(
+                                (code, f"action {action.numero} : {exc.__class__.__name__}: {exc}"[:160])
+                            )
 
             totaux["created"] += crees
             totaux["updated"] += maj

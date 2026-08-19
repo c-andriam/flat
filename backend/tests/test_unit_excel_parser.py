@@ -353,7 +353,9 @@ def test_echeance_illisible_signalee(tmp_path):
     assert any("échéance illisible" in w for w in resultat.warnings)
 
 
-def test_doublon_de_numero_signale(tmp_path):
+def test_doublon_de_numero_desambigue_sans_perte(tmp_path):
+    """Dans P31, une section numérote dix actions 01, 02, 02, 03, 03… : sans
+    désambiguïsation, quatre actions bien réelles étaient écrasées."""
     chemin = _classeur(
         tmp_path / "dbl.xlsx",
         [
@@ -361,10 +363,14 @@ def test_doublon_de_numero_signale(tmp_path):
              "progress": 0.0, "deadline": date(2026, 1, 1)},
             {"numero": "P04 - 01", "description": "Doublon", "responsables": "B",
              "progress": 0.0, "deadline": date(2026, 1, 2)},
+            {"numero": "P04-01", "description": "Triplon", "responsables": "C",
+             "progress": 0.0, "deadline": date(2026, 1, 3)},
         ],
     )
     resultat = parse_workbook(chemin, project_code="P04")
-    assert any("double" in w for w in resultat.warnings)
+    assert [a.numero for a in resultat.actions] == ["P04-01", "P04-01b", "P04-01c"]
+    assert [a.description for a in resultat.actions] == ["Première", "Doublon", "Triplon"]
+    assert sum("double" in w for w in resultat.warnings) == 2
 
 
 def test_code_projet_deduit_si_absent(tmp_path):

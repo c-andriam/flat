@@ -138,13 +138,11 @@ def test_put_accepte_une_charge_utile_complete():
         responsable_names=["Meylis"],
         deadline=date(2026, 12, 31),
         progress=25.0,
-        spi=90.0,
-        otd=80.0,
         charges_hj=2.5,
         commentaire="Tous les champs",
     )
     charge = complet.model_dump(exclude_unset=True)
-    assert len(charge) == 9
+    assert len(charge) == 7
     assert charge["responsable_names"] == ["Meylis"]
 
 
@@ -228,3 +226,20 @@ def test_echeance_lisible_sans_date():
     digest.deadline = None
     digest.days_left = None
     assert echeance_lisible(digest) == "sans échéance"
+
+
+def test_put_refuse_les_indicateurs_calcules():
+    """`spi` et `otd` sont dérivés : les accepter en écriture donnerait une
+    valeur que le prochain enregistrement écraserait."""
+    for champ in ("spi", "otd", "numero"):
+        with pytest.raises(pydantic.ValidationError) as err:
+            ActionUpdate(**{champ: 50})
+        assert "calcul" in str(err.value).lower()
+
+
+def test_put_refuse_un_statut_derive():
+    for statut in (ActionStatus.TERMINE, ActionStatus.EN_RETARD):
+        with pytest.raises(pydantic.ValidationError):
+            ActionUpdate(status=statut)
+    # `bloque` est un constat humain, il reste imposable.
+    assert ActionUpdate(status=ActionStatus.BLOQUE).status is ActionStatus.BLOQUE

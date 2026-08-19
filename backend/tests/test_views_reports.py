@@ -95,11 +95,15 @@ def test_put_plusieurs_champs(api, test_project):
     cree = api.post("/actions", json=_action(test_project["id"])).json()
     resp = api.put(
         f"/actions/{cree['id']}",
-        json={"progress": 40.0, "commentaire": "Deux champs", "spi": 80.0},
+        json={"progress": 40.0, "commentaire": "Deux champs", "resp_suivi": "Autre"},
     )
     assert resp.status_code == 200
     corps = resp.json()
-    assert (corps["progress"], corps["commentaire"], corps["spi"]) == (40.0, "Deux champs", 80.0)
+    assert (corps["progress"], corps["commentaire"], corps["resp_suivi"]) == (
+        40.0, "Deux champs", "Autre",
+    )
+    # Le SPI suit l'avancement sans avoir été envoyé.
+    assert corps["spi"] == 40.0
     assert corps["description"] == cree["description"]
 
 
@@ -115,8 +119,6 @@ def test_put_tous_les_champs(api, test_project):
             "responsable_names": ["Nouveau"],
             "deadline": "2027-01-31",
             "progress": 25.0,
-            "spi": 90.0,
-            "otd": 80.0,
             "charges_hj": 2.5,
             "commentaire": "Tous les champs",
             "date_realisation": None,
@@ -156,6 +158,42 @@ def test_put_progress_100_bascule_le_statut(api, test_project):
 def test_put_vide_rejete(api, test_project):
     cree = api.post("/actions", json=_action(test_project["id"])).json()
     assert api.put(f"/actions/{cree['id']}", json={}).status_code == 422
+
+
+def test_put_refuse_les_champs_calcules(api, test_project):
+    """`spi`, `otd` et `numero` sont dérivés : les accepter laisserait croire
+    à une saisie possible, que le prochain enregistrement écraserait."""
+    cree = api.post("/actions", json=_action(test_project["id"])).json()
+    for champ, valeur in (("spi", 75), ("otd", 100), ("numero", "X-01")):
+        resp = api.put(f"/actions/{cree['id']}", json={champ: valeur})
+        assert resp.status_code == 422, f"{champ} devrait être refusé"
+        assert "calcul" in resp.text.lower()
+
+
+def test_put_statut_derive_refuse(api, test_project):
+    cree = api.post("/actions", json=_action(test_project["id"])).json()
+    assert api.put(f"/actions/{cree['id']}", json={"status": "termine"}).status_code == 422
+    assert api.put(f"/actions/{cree['id']}", json={"status": "en_retard"}).status_code == 422
+    # `bloque` porte une information non déductible : il reste imposable.
+    resp = api.put(f"/actions/{cree['id']}", json={"status": "bloque"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "bloque"
+
+
+def test_put_spi_otd_suivent_l_avancement(api, test_project):
+    cree = api.post("/actions", json=_action(test_project["id"])).json()
+    assert (cree["spi"], cree["otd"]) == (0.0, 0.0)
+    corps = api.put(f"/actions/{cree['id']}", json={"progress": 100}).json()
+    assert corps["status"] == "termine"
+    assert corps["spi"] == 100.0
+    assert corps["otd"] == 100.0, "échéance future respectée"
+
+
+def test_put_otd_nul_si_echeance_depassee(api, test_project):
+    cree = api.post("/actions", json=_action(test_project["id"], deadline="2020-01-01")).json()
+    corps = api.put(f"/actions/{cree['id']}", json={"progress": 100}).json()
+    assert corps["status"] == "termine"
+    assert corps["otd"] == 0.0, "livrée après l'échéance"
 
 
 def test_put_champ_inconnu_rejete(api, test_project):

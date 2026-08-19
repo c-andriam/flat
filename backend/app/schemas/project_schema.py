@@ -23,7 +23,42 @@ def _validate_email(value: str | None) -> str | None:
     return value.lower()
 
 
-class PartialUpdate(BaseModel):
+#: Champs entièrement dérivés de l'avancement et des dates. Les accepter en
+#: écriture laisserait croire à une saisie possible, alors que le prochain
+#: enregistrement les recalculerait — une valeur qui ne « tient » pas est pire
+#: qu'une valeur refusée.
+CHAMPS_CALCULES = {
+    "spi": "il suit l'avancement (`progress`)",
+    "otd": "il vaut 100 si l'action est livrée au plus tard à son échéance, 0 sinon",
+    "numero": "il est généré à partir du code projet et de la phase",
+    "created_at": "il est horodaté par le serveur",
+    "updated_at": "il est horodaté par le serveur",
+}
+
+
+class RefuseChampsCalcules(BaseModel):
+    """Rejette explicitement les champs dérivés, avec le motif.
+
+    `extra="forbid"` seul renverrait « Extra inputs are not permitted », sans
+    dire pourquoi ce champ précis est refusé ni comment obtenir l'effet voulu.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _refuser_les_champs_calcules(cls, data):
+        if not isinstance(data, dict):
+            return data
+        interdits = [c for c in CHAMPS_CALCULES if c in data]
+        if interdits:
+            details = "; ".join(f"`{c}` : {CHAMPS_CALCULES[c]}" for c in interdits)
+            raise ValueError(
+                f"Champ(s) calculé(s) automatiquement, non modifiable(s) — {details}. "
+                "Modifier `progress`, `deadline` ou `date_realisation` pour les faire évoluer."
+            )
+        return data
+
+
+class PartialUpdate(RefuseChampsCalcules):
     """Socle des charges utiles de modification (PUT).
 
     `extra="forbid"` : un champ mal orthographié (`progres` au lieu de
@@ -104,15 +139,15 @@ class ActionBase(BaseModel):
     description: str = Field(..., min_length=1, description="Description ou titre de l'action.")
     resp_suivi: str | None = Field(None, max_length=255, description="Nom du responsable du suivi.")
     progress: float = Field(0.0, ge=0.0, le=100.0, description="Pourcentage d'avancement de 0 à 100.")
-    spi: float = Field(0.0, description="Schedule Performance Index.")
-    otd: float = Field(0.0, description="On-Time Delivery score.")
     deadline: date | None = Field(None, description="Date d'échéance cible de l'action.")
     date_realisation: date | None = Field(None, description="Date réelle de complétion.")
     charges_hj: float | None = Field(None, description="Charges estimées en Homme/Jour.")
     commentaire: str | None = Field(None, description="Commentaire libre.")
 
 
-class ActionCreate(ActionBase):
+class ActionCreate(ActionBase, RefuseChampsCalcules):
+    model_config = ConfigDict(extra="forbid")
+
     # Contraintes strictes à la création : un suivi sans responsable ni
     # échéance n'est pas exploitable. ActionOut reste nullable pour ne pas
     # casser la lecture des actions existantes créées avant cette règle.
@@ -155,17 +190,33 @@ class ActionUpdate(PartialUpdate):
         None, ge=0.0, le=100.0,
         description="Nouvel avancement (0 à 100). À 100, le statut bascule à TERMINE.",
     )
-    spi: float | None = Field(None, ge=0.0, description="Nouveau SPI.")
-    otd: float | None = Field(None, ge=0.0, description="Nouveau OTD.")
     deadline: date | None = Field(None, description="Nouvelle échéance.")
     date_realisation: date | None = Field(None, description="Nouvelle date de réalisation.")
     charges_hj: float | None = Field(None, ge=0.0, description="Nouvelle estimation Homme/Jour.")
     commentaire: str | None = Field(None, description="Nouveau commentaire.")
-    # Typé en énumération : la liste des valeurs acceptées apparaît dans Swagger
-    # et une faute de frappe est rejetée en 422 par Pydantic, pas plus loin.
+    # Seuls les statuts qui portent une information non déductible restent
+    # imposables. `termine` et `en_retard` se déduisent de l'avancement et de
+    # l'échéance : les forcer produirait une ligne incohérente (« terminée » à
+    # 40 %) que le prochain enregistrement corrigerait de toute façon.
     status: ActionStatus | None = Field(
-        None, description="Forcer le statut (sinon recalculé automatiquement)."
+        None,
+        description=(
+            "Forcer le statut. Seuls `a_faire`, `en_cours` et `bloque` sont "
+            "acceptés — `termine` s'obtient en passant `progress` à 100, et "
+            "`en_retard` découle de l'échéance."
+        ),
     )
+
+    @field_validator("status")
+    @classmethod
+    def _statut_imposable(cls, v):
+        if v in (ActionStatus.TERMINE, ActionStatus.EN_RETARD):
+            raise ValueError(
+                f"Le statut `{v.value}` est déduit automatiquement et ne peut pas "
+                "être imposé : passer `progress` à 100 pour terminer une action, "
+                "et l'échéance détermine le retard."
+            )
+        return v
     phase: str | None = Field(None, max_length=10, description="Changer la phase de l'action.")
     responsable_names: list[str] | None = Field(
         None,
@@ -204,6 +255,15 @@ class ActionOut(ActionBase):
     phase: str | None = None
     project_id: uuid.UUID
     status: ActionStatus
+    # Calculés par le serveur, jamais acceptés en écriture.
+    spi: float = Field(..., description="Schedule Performance Index — suit l'avancement.")
+    otd: float = Field(
+        ...,
+        description=(
+            "Taux de respect de la deadline : 100 si l'action est livrée au "
+            "plus tard à son échéance, 0 sinon ou tant qu'elle n'est pas livrée."
+        ),
+    )
     responsables: list[ResponsableOut] = []
     created_at: datetime
     updated_at: datetime

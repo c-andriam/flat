@@ -113,7 +113,7 @@ async def _preparer(
     elif not (responsable.is_mapped and responsable.email):
         motif = (
             "Responsable non mappé : aucune adresse email associée. "
-            "Renseigner l'email via PATCH /responsables/{id}."
+            "Renseigner l'email via PUT /responsables/{id}."
         )
     elif not ignorer_silence and _en_periode_de_silence(await _derniere_relance(db, responsable_id)):
         motif = (

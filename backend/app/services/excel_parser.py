@@ -314,21 +314,56 @@ def split_phase(numero: str) -> str | None:
     return None
 
 
-def _niveau_section(token: str, pile: list[str]) -> str:
+def _niveau_section(token: str, pile: list[str], hierarchique: bool) -> str:
     """Rétablit les tirets manquants dans le niveau d'une section.
 
     Les classeurs alternent entre `P10-1-1` et `P10-12` pour désigner la même
     profondeur, et le fichier consolidé retient partout la forme à tirets. On
     la reconstitue à partir de la section parente : sous « P10-1 », le niveau
-    « 12 » est « 1-2 ». Sans cette normalisation, une même sous-section porte
-    deux identifiants selon la façon dont elle a été saisie.
+    « 12 » est « 1-2 ».
+
+    Ce découpage n'est appliqué que si le classeur a déjà montré une section à
+    deux niveaux écrite explicitement (« P10-1-1 »). Sans cette condition, la
+    dixième section d'un projet à découpage plat — « P31-10 », qui suit
+    « P31-1 » — serait comprise comme « 1-0 ».
     """
+    if not hierarchique:
+        return token
     compact = token.replace("-", "")
     for parent in reversed(pile):
         parent_compact = parent.replace("-", "")
         if compact != parent_compact and compact.startswith(parent_compact):
             return f"{parent}-{compact[len(parent_compact):]}"
     return token
+
+
+def _numero_de_code(code: str | None) -> int | None:
+    """Partie numérique d'un code projet : « P07 » -> 7, « P9 » -> 9."""
+    if not code:
+        return None
+    chiffres = re.sub(r"\D", "", code)
+    return int(chiffres) if chiffres else None
+
+
+def _phase_depuis_prefixe(project_code: str | None, numero_source: str) -> str | None:
+    """Préfixe du numéro lorsqu'il désigne un autre code que celui du projet.
+
+    Le classeur de P23 empile deux campagnes dans la même feuille, la première
+    numérotée « P07 - 01 » à « P07 - 19 », la seconde « P23 - 01 » et suivantes.
+    Sans distinction, les deux se ramènent aux mêmes numéros canoniques et la
+    moitié des actions est écrasée. Le préfixe distinct est la seule marque de
+    séparation présente : on s'en sert comme phase.
+
+    La comparaison est numérique : « P9 » et « P09 » désignent le même projet.
+    """
+    segments = _segments(numero_source)
+    if len(segments) < 2:
+        return None
+    prefixe = _numero_de_code(segments[0])
+    projet = _numero_de_code(project_code)
+    if prefixe is None or projet is None or prefixe == projet:
+        return None
+    return f"{prefixe:02d}"
 
 
 def _phase_depuis_libelle(libelle: Any) -> str | None:
@@ -497,6 +532,7 @@ def parse_workbook(
         phase_courante: str | None = None
         section_courante: str | None = None
         pile_sections: list[str] = []
+        sections_hierarchiques = False
         code_projet = project_code
 
         for ligne in range(entete + 1, worksheet.max_row + 1):
@@ -539,7 +575,13 @@ def parse_workbook(
                 # (« P10-1-1 ») : il devient la phase des actions qui suivent.
                 segments_section = _segments(numero_source)
                 if len(segments_section) >= 2 and not phase_libelle:
-                    niveau = _niveau_section("-".join(segments_section[1:]), pile_sections)
+                    token = "-".join(segments_section[1:])
+                    if len(segments_section) >= 3:
+                        # Section écrite explicitement à deux niveaux : le
+                        # classeur assume une hiérarchie, les niveaux compacts
+                        # qui suivent peuvent être découpés en conséquence.
+                        sections_hierarchiques = True
+                    niveau = _niveau_section(token, pile_sections, sections_hierarchiques)
                     if niveau not in pile_sections:
                         pile_sections.append(niveau)
                     phase_courante = niveau
@@ -555,8 +597,14 @@ def parse_workbook(
             # La section englobante fait autorité sur le numéro saisi : dans
             # P10, les actions de la section « P10-13 » sont numérotées
             # « P02 -13 - 1 », avec un préfixe qui désigne un autre projet.
-            # Le numéro de l'action ne sert que faute de section.
-            phase = phase_courante or split_phase(numero_source)
+            # Le numéro de l'action ne sert que faute de section, et son
+            # préfixe en dernier recours — c'est la seule marque séparant les
+            # deux campagnes empilées dans le classeur de P23.
+            phase = (
+                phase_courante
+                or split_phase(numero_source)
+                or _phase_depuis_prefixe(code_projet, numero_source)
+            )
 
             deadline_brute = valeur(ligne, "deadline")
             deadline = _safe_date(deadline_brute)
@@ -621,17 +669,30 @@ def parse_workbook(
 
         resultat.phases = sorted({a.phase for a in resultat.actions if a.phase})
 
-        # Doublons de numéro : la contrainte unique (project_id, numero) les
-        # rejetterait un par un côté worker, avec un message peu parlant.
+        # Doublons de numéro. La contrainte unique (project_id, numero) ferait
+        # que la seconde action écrase la première : quatre actions bien
+        # réelles de P31 disparaissaient ainsi, leur section les ayant
+        # numérotées 01, 02, 02, 03, 03, 04, 04, 05, 05, 06.
+        # On suffixe plutôt les suivantes d'une lettre pour ne rien perdre, et
+        # on le signale — c'est au fichier d'être corrigé.
         vus: dict[str, int] = {}
-        for action in resultat.actions:
-            if action.numero in vus:
-                resultat.warnings.append(
-                    f"Numéro en double : {action.numero!r} lignes {vus[action.numero]} "
-                    f"et {action.row}. Une seule des deux actions sera conservée."
-                )
-            else:
+        for index, action in enumerate(resultat.actions):
+            if action.numero not in vus:
                 vus[action.numero] = action.row
+                continue
+            suffixe = "b"
+            while f"{action.numero}{suffixe}" in vus:
+                suffixe = chr(ord(suffixe) + 1)
+            corrige = f"{action.numero}{suffixe}"
+            resultat.warnings.append(
+                f"Numéro en double dans le fichier : {action.numero!r} déjà utilisé "
+                f"ligne {vus[action.numero]}, réutilisé ligne {action.row}. "
+                f"L'action de la ligne {action.row} est importée sous {corrige!r} "
+                "pour ne pas écraser la précédente — corriger la numérotation "
+                "dans le classeur."
+            )
+            resultat.actions[index] = replace(action, numero=corrige)
+            vus[corrige] = action.row
 
         if not resultat.actions:
             resultat.warnings.append(
