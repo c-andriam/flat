@@ -529,10 +529,14 @@ def _enregistrer_vue(chemin: str, vue: ActionView, resume: str, details: str) ->
         limit: int = _limit_param(),
         offset: int = _OFFSET_PARAM,
         db: AsyncSession = Depends(get_async_db),
-        _vue: ActionView = vue,
     ):
+        # `vue` est capturée par la fermeture. La lier via un paramètre par
+        # défaut, comme on le ferait dans une boucle nue, la ferait apparaître
+        # comme un paramètre de requête : `?_vue=done` sur /actions/today
+        # aurait renvoyé la mauvaise liste. Ici chaque appel de
+        # `_enregistrer_vue` a sa propre variable, la capture suffit.
         stmt = build_actions_query(
-            view=_vue,
+            view=vue,
             project_id=project_id,
             responsable_id=responsable_id,
             active_projects_only=active_projects_only,
