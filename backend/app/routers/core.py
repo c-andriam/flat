@@ -70,7 +70,36 @@ def _limit_param(default: int = MAX_PAGE_SIZE):
     )
 
 
-_OFFSET_PARAM = Query(0, ge=0, description="Nombre d'éléments à ignorer (pagination).")
+_OFFSET_PARAM = Query(
+    0,
+    ge=0,
+    description=(
+        "Nombre d'éléments à sauter, pour la pagination. Avec `limit=50`, "
+        "`offset=50` donne la deuxième page. Le total avant pagination est "
+        "renvoyé dans l'en-tête `X-Total-Count`."
+    ),
+)
+
+_PROJECT_PARAM = Query(
+    None,
+    description="Ne garder que les actions de ce projet (son identifiant UUID).",
+)
+
+_RESPONSABLE_PARAM = Query(
+    None,
+    description=(
+        "Ne garder que les actions portées par ce responsable (son identifiant "
+        "UUID, obtenu via `GET /responsables`)."
+    ),
+)
+
+_ACTIFS_PARAM = Query(
+    True,
+    description=(
+        "Écarter les actions des projets archivés (`is_active=false`). Mettre "
+        "à `false` pour inclure l'historique complet."
+    ),
+)
 
 
 async def _count(db: AsyncSession, stmt) -> int:
@@ -371,14 +400,23 @@ async def delete_project(
 
 # Paramètres partagés par toutes les vues d'actions.
 _DUE_SOON_PARAM = Query(
-    3, ge=1, le=90,
-    description="Horizon en jours de la vue « échéance proche ».",
+    3,
+    ge=1,
+    le=90,
+    description=(
+        "Combien de jours à l'avance considérer qu'une échéance « approche ». "
+        "Avec la valeur par défaut 3, la vue couvre demain, après-demain et le "
+        "jour suivant — aujourd'hui étant exclu, il relève de `/actions/today`."
+    ),
 )
 _WEEKS_AHEAD_PARAM = Query(
-    1, ge=0, le=52,
+    1,
+    ge=0,
+    le=52,
     description=(
-        "Décalage en semaines de la vue « à venir » : 0 = semaine courante, "
-        "1 = semaine prochaine, 2 = la suivante."
+        "Quelle semaine calendaire regarder, du lundi au dimanche. "
+        "`0` = la semaine en cours, `1` = la semaine prochaine (défaut), "
+        "`2` = celle d'après."
     ),
 )
 
@@ -498,12 +536,17 @@ async def actions_summary(
 def _enregistrer_vue(chemin: str, vue: ActionView, resume: str, details: str) -> None:
     """Déclare une route raccourcie pour une vue métier.
 
+    Chaque vue n'expose que les paramètres qui la concernent : `due_soon_days`
+    n'a de sens que pour « échéance proche », `weeks_ahead` que pour « à
+    venir ». Les exposer partout — ce que faisait une fabrique unique —
+    remplissait la documentation de réglages sans effet, impossibles à
+    distinguer de ceux qui comptent.
+
     Ces routes doivent être déclarées AVANT `/actions/{action_id}` : FastAPI
     résout dans l'ordre de déclaration, et `/actions/overdue` serait sinon
     capté par la route paramétrée puis rejeté comme UUID invalide.
     """
-
-    @router.get(
+    decorateur = router.get(
         f"/actions/{chemin}",
         response_model=list[ActionOut],
         dependencies=[require_reader],
@@ -514,31 +557,74 @@ def _enregistrer_vue(chemin: str, vue: ActionView, resume: str, details: str) ->
         responses=AUTH_RESPONSES,
         name=f"list_actions_{vue.value}",
     )
-    async def _route(
-        response: Response,
-        project_id: uuid.UUID | None = Query(None, description="Restreindre à un projet."),
-        responsable_id: uuid.UUID | None = Query(None, description="Restreindre à un responsable."),
-        active_projects_only: bool = Query(True, description="Ignorer les projets archivés."),
-        due_soon_days: int = _DUE_SOON_PARAM,
-        weeks_ahead: int = _WEEKS_AHEAD_PARAM,
-        limit: int = _limit_param(),
-        offset: int = _OFFSET_PARAM,
-        db: AsyncSession = Depends(get_async_db),
-    ):
-        # `vue` est capturée par la fermeture. La lier via un paramètre par
-        # défaut, comme on le ferait dans une boucle nue, la ferait apparaître
-        # comme un paramètre de requête : `?_vue=done` sur /actions/today
-        # aurait renvoyé la mauvaise liste. Ici chaque appel de
-        # `_enregistrer_vue` a sa propre variable, la capture suffit.
-        stmt = build_actions_query(
-            view=vue,
-            project_id=project_id,
-            responsable_id=responsable_id,
-            active_projects_only=active_projects_only,
-            due_soon_days=due_soon_days,
-            weeks_ahead=weeks_ahead,
-        )
-        return await _run_actions_query(db, response, stmt, limit, offset)
+
+    # `vue` est capturée par la fermeture. La lier via un paramètre par défaut,
+    # comme on le ferait dans une boucle nue, la ferait apparaître comme un
+    # paramètre de requête : `?_vue=done` sur /actions/today aurait renvoyé la
+    # mauvaise liste. Chaque appel de `_enregistrer_vue` a sa propre variable.
+    if vue is ActionView.DUE_SOON:
+
+        @decorateur
+        async def _route(
+            response: Response,
+            project_id: uuid.UUID | None = _PROJECT_PARAM,
+            responsable_id: uuid.UUID | None = _RESPONSABLE_PARAM,
+            active_projects_only: bool = _ACTIFS_PARAM,
+            due_soon_days: int = _DUE_SOON_PARAM,
+            limit: int = _limit_param(),
+            offset: int = _OFFSET_PARAM,
+            db: AsyncSession = Depends(get_async_db),
+        ):
+            stmt = build_actions_query(
+                view=vue,
+                project_id=project_id,
+                responsable_id=responsable_id,
+                active_projects_only=active_projects_only,
+                due_soon_days=due_soon_days,
+            )
+            return await _run_actions_query(db, response, stmt, limit, offset)
+
+    elif vue is ActionView.UPCOMING:
+
+        @decorateur
+        async def _route(
+            response: Response,
+            project_id: uuid.UUID | None = _PROJECT_PARAM,
+            responsable_id: uuid.UUID | None = _RESPONSABLE_PARAM,
+            active_projects_only: bool = _ACTIFS_PARAM,
+            weeks_ahead: int = _WEEKS_AHEAD_PARAM,
+            limit: int = _limit_param(),
+            offset: int = _OFFSET_PARAM,
+            db: AsyncSession = Depends(get_async_db),
+        ):
+            stmt = build_actions_query(
+                view=vue,
+                project_id=project_id,
+                responsable_id=responsable_id,
+                active_projects_only=active_projects_only,
+                weeks_ahead=weeks_ahead,
+            )
+            return await _run_actions_query(db, response, stmt, limit, offset)
+
+    else:
+
+        @decorateur
+        async def _route(
+            response: Response,
+            project_id: uuid.UUID | None = _PROJECT_PARAM,
+            responsable_id: uuid.UUID | None = _RESPONSABLE_PARAM,
+            active_projects_only: bool = _ACTIFS_PARAM,
+            limit: int = _limit_param(),
+            offset: int = _OFFSET_PARAM,
+            db: AsyncSession = Depends(get_async_db),
+        ):
+            stmt = build_actions_query(
+                view=vue,
+                project_id=project_id,
+                responsable_id=responsable_id,
+                active_projects_only=active_projects_only,
+            )
+            return await _run_actions_query(db, response, stmt, limit, offset)
 
 
 _VUES_RACCOURCIES = [
