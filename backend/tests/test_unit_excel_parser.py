@@ -115,8 +115,44 @@ def test_parse_responsables_separateurs():
     assert _parse_responsables("Meylis / Xavier") == ["Meylis", "Xavier"]
     assert _parse_responsables("Andry II, Xavier") == ["Andry II", "Xavier"]
     assert _parse_responsables("AndryII - Teknet") == ["AndryII", "Teknet"]
+    assert _parse_responsables("Xavier et Manda") == ["Xavier", "Manda"]
     assert _parse_responsables("Meylis\n") == ["Meylis"]
     assert _parse_responsables(None) == []
+
+
+@pytest.mark.parametrize(
+    "cellule,attendu",
+    [
+        ("Meylis-Hassen", ["Meylis", "Hassen"]),
+        ("Xavier -Hassen", ["Xavier", "Hassen"]),
+        ("Xavier- Hassen", ["Xavier", "Hassen"]),
+        ("Manoa -Karine", ["Manoa", "Karine"]),
+        ("Xavier-Hassen-MDC", ["Xavier", "Hassen", "MDC"]),
+        ("Xavier -manoa -karine", ["Xavier", "manoa", "karine"]),
+    ],
+)
+def test_le_tiret_separe_deux_personnes(cellule, attendu):
+    """Sept cellules des classeurs mettaient plusieurs personnes derrière un
+    tiret sans espacement régulier. Elles produisaient une fiche composite par
+    combinaison : 21 actions invisibles du plan de charge de chacun, et
+    impossibles à relancer puisqu'une fiche composite n'a pas d'email."""
+    assert _parse_responsables(cellule) == attendu
+
+
+def test_nom_compose_protege(monkeypatch):
+    """Un prénom composé serait découpé à tort : `RESPONSABLES_INSECABLES`
+    permet de l'exclure sans toucher au code."""
+    monkeypatch.setenv("RESPONSABLES_INSECABLES", "Jean-Pierre, Marie-Claire")
+    assert _parse_responsables("Jean-Pierre") == ["Jean-Pierre"]
+    assert _parse_responsables("Marie-Claire") == ["Marie-Claire"]
+    # Les autres restent découpés.
+    assert _parse_responsables("Meylis-Hassen") == ["Meylis", "Hassen"]
+
+
+def test_ou_n_est_pas_un_separateur():
+    """« Teknet ou autre » désigne une incertitude, pas deux personnes."""
+    assert _parse_responsables("Teknet ou autre") == ["Teknet ou autre"]
+    assert _parse_responsables("Equipe projet") == ["Equipe projet"]
 
 
 def test_parse_responsables_dedoublonne_sans_tenir_compte_de_la_casse():

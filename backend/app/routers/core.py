@@ -45,6 +45,7 @@ from app.services.action_rules import (
     today_utc,
 )
 from app.services.events import publish_event
+from app.services.names import dedupe, normalize_key
 from app.services.health import perform_health_check_async
 from app.services.security import require_reader, require_writer
 
@@ -144,38 +145,32 @@ async def _sync_action_responsables(db: AsyncSession, action: Action, noms: list
     INSERT complet à chaque enregistrement est inutilement coûteux et bruyant
     quand rien n'a changé.
     """
-    voulus: list[str] = []
-    for nom in noms:
-        nom = (nom or "").strip()
-        if nom and nom not in voulus:
-            voulus.append(nom)
+    voulus = dedupe(noms)
+    cles_voulues = {normalize_key(n) for n in voulus}
 
-    voulus_casefold = {n.casefold() for n in voulus}
     for responsable in list(action.responsables):
-        if responsable.display_name.casefold() not in voulus_casefold:
+        if normalize_key(responsable.display_name) not in cles_voulues:
             action.responsables.remove(responsable)
 
-    # Index insensible à la casse des responsables déjà rattachés, y compris
-    # ceux créés plus haut dans cette même boucle : sans lui, « Xavier » puis
-    # « xavier » produiraient deux fiches, la seconde n'étant pas encore
-    # visible en base (la session n'est pas en autoflush).
-    deja = {r.display_name.casefold(): r for r in action.responsables}
+    # Index des responsables déjà rattachés, y compris ceux créés plus haut
+    # dans cette même boucle : la session n'est pas en autoflush, une fiche
+    # créée à l'instant n'est pas encore visible par un SELECT.
+    deja = {normalize_key(r.display_name): r for r in action.responsables}
 
     for nom in voulus:
-        if nom.casefold() in deja:
+        cle = normalize_key(nom)
+        if cle in deja:
             continue
-        # Insensible à la casse : les noms viennent d'Excel, où « Xavier » et
-        # « xavier » cohabitent. Deux fiches pour la même personne, ce sont
-        # deux relances pour la même action.
-        result = await db.execute(
-            select(Responsable).filter(func.lower(Responsable.display_name) == nom.lower())
-        )
+        # Rapprochement sur la clé : « AndryII », « Andry II » et « andry ii »
+        # désignent la même personne. Deux fiches, ce serait une charge de
+        # travail éclatée dans les rapports et deux relances pour un seul agent.
+        result = await db.execute(select(Responsable).filter(Responsable.name_key == cle))
         responsable = result.scalars().first()
         if responsable is None:
-            responsable = Responsable(display_name=nom, is_mapped=False)
+            responsable = Responsable(display_name=nom, name_key=cle, is_mapped=False)
             db.add(responsable)
         action.responsables.append(responsable)
-        deja[nom.casefold()] = responsable
+        deja[cle] = responsable
 
 
 def _valider_phase(project: Project, phase: str | None) -> str | None:
@@ -899,6 +894,7 @@ async def get_responsable(
 async def create_responsable(payload: ResponsableCreate, db: AsyncSession = Depends(get_async_db)):
     responsable = Responsable(
         display_name=payload.display_name,
+        name_key=normalize_key(payload.display_name),
         email=payload.email,
         is_mapped=payload.email is not None,
     )
@@ -907,7 +903,12 @@ async def create_responsable(payload: ResponsableCreate, db: AsyncSession = Depe
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        raise HTTPException(status_code=409, detail="Ce responsable existe déjà")
+        raise HTTPException(status_code=409, detail=(
+                "Ce responsable existe déjà. Le rapprochement ignore la casse, "
+                "les accents, les espaces et la ponctuation : « AndryII » et "
+                "« Andry II » désignent la même personne."
+            ),
+        )
 
     await db.refresh(responsable)
     await publish_event(
@@ -951,6 +952,9 @@ async def update_responsable(
         responsable.is_mapped = update_data["email"] is not None
     if update_data.get("display_name"):
         responsable.display_name = update_data["display_name"]
+        # La clé suit le nom : sans ça, un renommage laisserait une clé
+        # obsolète et le prochain import recréerait une fiche séparée.
+        responsable.name_key = normalize_key(update_data["display_name"])
 
     try:
         await db.commit()

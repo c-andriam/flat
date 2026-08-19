@@ -29,6 +29,7 @@ from app.models.project import (
 )
 from app.services.action_rules import apply_indicators
 from app.services.events import publish_event_sync
+from app.services.names import dedupe, normalize_key
 from app.services.excel_parser import ParsedAction, parse_workbook
 from app.workers.celery_app import app
 
@@ -222,34 +223,29 @@ def _sync_responsables(db, action: Action, names: list[str]) -> None:
     les associations à chaque synchronisation, même quand rien n'avait changé —
     inutilement coûteux, et bruyant dans les journaux de réplication.
     """
-    wanted = []
-    for name in names:
-        name = (name or "").strip()
-        if name and name not in wanted:
-            wanted.append(name)
+    voulus = dedupe(names)
+    cles_voulues = {normalize_key(n) for n in voulus}
 
-    current = {resp.display_name: resp for resp in action.responsables}
+    for responsable in list(action.responsables):
+        if normalize_key(responsable.display_name) not in cles_voulues:
+            action.responsables.remove(responsable)
 
-    for name in list(current):
-        if name not in wanted:
-            action.responsables.remove(current[name])
+    deja = {normalize_key(r.display_name): r for r in action.responsables}
 
-    for name in wanted:
-        if name in current:
+    for nom in voulus:
+        cle = normalize_key(nom)
+        if cle in deja:
             continue
-        # Comparaison insensible à la casse : les fichiers écrivent aussi bien
-        # « Xavier » que « xavier », et deux fiches pour la même personne
-        # signifient deux relances distinctes pour la même action.
-        resp = (
-            db.query(Responsable)
-            .filter(func.lower(Responsable.display_name) == name.lower())
-            .first()
-        )
+        # Rapprochement sur la clé : les classeurs écrivent « AndryII »,
+        # « Andry II » et « andry ii » pour la même personne. Une fiche par
+        # graphie, c'est une charge éclatée et plusieurs relances par agent.
+        resp = db.query(Responsable).filter(Responsable.name_key == cle).first()
         if not resp:
-            resp = Responsable(display_name=name, is_mapped=False)
+            resp = Responsable(display_name=nom, name_key=cle, is_mapped=False)
             db.add(resp)
             db.flush()
         action.responsables.append(resp)
+        deja[cle] = resp
 
 
 @app.task(name="app.workers.ingestion.sync_sharepoint")

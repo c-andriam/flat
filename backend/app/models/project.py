@@ -51,6 +51,11 @@ class Responsable(UUIDMixin, Base):
     __tablename__ = "responsables"
 
     display_name = Column(String(255), unique=True, nullable=False, index=True)
+    # Clé de rapprochement : le nom sans casse, accents, espaces ni
+    # ponctuation. « AndryII » et « Andry II » désignent la même personne, et
+    # l'unicité sur `display_name` seule les laissait cohabiter — d'où une
+    # charge éclatée dans les rapports et deux relances pour un seul agent.
+    name_key = Column(String(255), unique=True, nullable=False, index=True)
     email = Column(String(255), nullable=True)
     is_mapped = Column(Boolean, default=False, nullable=False)
 

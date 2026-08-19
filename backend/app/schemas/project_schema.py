@@ -5,6 +5,7 @@ from datetime import date, datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.project import ActionStatus, SyncStatus
+from app.services.names import dedupe, split_personnes
 
 # Validation d'email volontairement permissive : elle rejette les fautes de
 # frappe évidentes (« jean.dupont@ », « trimeta.mg ») sans embarquer la
@@ -171,13 +172,17 @@ class ActionCreate(ActionBase, RefuseChampsCalcules):
         # Dédoublonnage insensible à la casse : « Xavier » et « xavier »
         # désignent la même personne, et deux fiches responsable signifient
         # deux relances pour la même action.
-        cleaned: list[str] = []
-        vus: set[str] = set()
-        for name in values:
-            name = (name or "").strip()
-            if name and name.casefold() not in vus:
-                vus.add(name.casefold())
-                cleaned.append(name)
+        composites = [n for n in values if n and len(split_personnes(n)) > 1]
+        if composites:
+            # Ne pas découper en silence : la liste est explicite côté API, une
+            # entrée composite est une erreur d'appel. Les classeurs Excel, eux,
+            # n'ont qu'une cellule et sont découpés à l'import.
+            exemple = split_personnes(composites[0])
+            raise ValueError(
+                f"Un responsable par entrée : {composites[0]!r} en contient "
+                f"plusieurs. Envoyer {exemple} plutôt qu'une chaîne combinée."
+            )
+        cleaned = dedupe(values)
         if not cleaned:
             raise ValueError("Au moins un responsable de réalisation est requis.")
         return cleaned
@@ -235,13 +240,17 @@ class ActionUpdate(PartialUpdate):
         # responsable, donc deux relances pour la même action.
         if values is None:
             return None
-        cleaned: list[str] = []
-        vus: set[str] = set()
-        for name in values:
-            name = (name or "").strip()
-            if name and name.casefold() not in vus:
-                vus.add(name.casefold())
-                cleaned.append(name)
+        composites = [n for n in values if n and len(split_personnes(n)) > 1]
+        if composites:
+            # Ne pas découper en silence : la liste est explicite côté API, une
+            # entrée composite est une erreur d'appel. Les classeurs Excel, eux,
+            # n'ont qu'une cellule et sont découpés à l'import.
+            exemple = split_personnes(composites[0])
+            raise ValueError(
+                f"Un responsable par entrée : {composites[0]!r} en contient "
+                f"plusieurs. Envoyer {exemple} plutôt qu'une chaîne combinée."
+            )
+        cleaned = dedupe(values)
         if not cleaned:
             raise ValueError("Au moins un responsable de réalisation est requis.")
         return cleaned

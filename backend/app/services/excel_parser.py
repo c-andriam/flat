@@ -41,15 +41,14 @@ from typing import Any
 
 import openpyxl
 
+from app.services.names import split_personnes
+
 logger = logging.getLogger("excel-parser")
 
 # Segments séparés par des tirets, le dernier étant numérique.
 _NUMERO_RE = re.compile(r"^[A-Za-z0-9]+(?:\s*-\s*[A-Za-z0-9]+)+$")
 _PHASE_RE = re.compile(r"phase\s*n?°?\s*(\d+)", re.IGNORECASE)
 
-# Séparateurs de responsables : « Meylis / Xavier », « Manda, Xavier »,
-# « AndryII - Teknet », « Xavier et Manda ».
-_SEP_RESPONSABLES = re.compile(r"\s*(?:/|,|&|\+|\s-\s|\bet\b)\s*", re.IGNORECASE)
 
 # Lignes explorées à la recherche de l'en-tête avant d'abandonner une feuille.
 _MAX_HEADER_SCAN = 40
@@ -254,25 +253,17 @@ def _nettoyer_nom(nom: str) -> str:
 
 
 def _parse_responsables(valeur: Any) -> list[str]:
-    """Liste des responsables, dédoublonnée sans tenir compte de la casse.
+    """Liste des responsables d'une cellule, dédoublonnée.
 
-    « xavier » et « Xavier » désignent la même personne : les compter pour
-    deux créerait deux fiches responsable, donc deux relances distinctes.
+    Le rapprochement ignore casse, accents, espaces et ponctuation : « xavier »
+    et « Xavier », « AndryII » et « Andry II » désignent la même personne. Les
+    compter pour deux créerait deux fiches, donc deux relances distinctes.
     """
     if not valeur:
         return []
-    noms: list[str] = []
-    vus: set[str] = set()
-    for morceau in _SEP_RESPONSABLES.split(str(valeur)):
-        nom = _nettoyer_nom(morceau)
-        if not nom:
-            continue
-        cle = _sans_accents(nom).lower()
-        if cle in vus:
-            continue
-        vus.add(cle)
-        noms.append(nom)
-    return noms
+    # Une seule définition des séparateurs, dans `services/names` : dupliquée
+    # ici, elle avait déjà divergé de celle utilisée par la validation d'API.
+    return split_personnes(_nettoyer_nom(str(valeur)))
 
 
 def normalize_numero(brut: Any) -> str:
