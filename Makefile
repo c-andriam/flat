@@ -15,7 +15,7 @@ NC			= \033[0m
 # ==============================================================================
 # Règles principales
 # ==============================================================================
-.PHONY: all build up down start stop status logs clean fclean re migrate makemigrations db-update db-shell test test-unit token doctor up-local down-local migrate-local import front-install front-dev front-build front-lint front-check ensure-backend-image login
+.PHONY: all build up down start stop status logs clean fclean re migrate makemigrations db-update db-shell test test-unit token doctor up-local down-local migrate-local import front-install front-dev front-build front-lint front-check ensure-backend-image login sharepoint-check sharepoint-import
 
 # Règle par défaut
 all: up
@@ -209,6 +209,24 @@ test:
 test-unit:
 	@echo "$(GREEN) Tests unitaires (sans infrastructure)...$(NC)"
 	$(PODMAN) exec dsio-core-api python3 -m pytest tests/test_unit_*.py
+
+# Diagnostic de l'acces fichiers SharePoint : resout le site, la bibliotheque
+# et compte les dossiers projet lisibles. A lancer apres avoir accorde la
+# permission d'application dans Entra ID.
+sharepoint-check:
+	@echo "$(YELLOW) Verification de l'acces SharePoint...$(NC)"
+	@$(PODMAN) exec dsio-core-api python3 -c "\
+import json; from app.services.graph_files import check_access; \
+print(json.dumps(check_access(), indent=2, ensure_ascii=False))"
+
+# Import des classeurs depuis SharePoint. Sans --apply, rien n'est ecrit :
+#   make sharepoint-import              (parcours a blanc)
+#   make sharepoint-import APPLY=1      (import reel)
+#   make sharepoint-import ONLY=P10
+sharepoint-import:
+	@$(PODMAN) exec dsio-core-api python3 -c "\
+import json; from app.workers.ingestion import sync_sharepoint; \
+print(json.dumps(sync_sharepoint(only=$(if $(ONLY),'$(ONLY)',None), dry_run=$(if $(APPLY),False,True)), indent=2, ensure_ascii=False, default=str))"
 
 # ==============================================================================
 # Frontend (SPA React + TypeScript)

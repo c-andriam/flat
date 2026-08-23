@@ -1,6 +1,7 @@
 import { Outlet } from 'react-router-dom'
 
 import { RequireAuth } from '@/auth/RequireAuth'
+import { DailyReportReminder } from '@/components/DailyReportReminder'
 import { UnlinkedNotice } from '@/components/UnlinkedNotice'
 import { Sidebar } from './Sidebar'
 
@@ -12,6 +13,7 @@ export function DashboardLayout() {
       <div className="min-w-0 flex-1">
         <RequireAuth>
           <UnlinkedNotice />
+          <DailyReportReminder />
           <Outlet />
         </RequireAuth>
       </div>

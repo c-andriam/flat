@@ -13,6 +13,8 @@ Flux :
 """
 
 import logging
+import tempfile
+from pathlib import Path
 from datetime import datetime, timezone
 
 from sqlalchemy import func
@@ -27,10 +29,12 @@ from app.models.project import (
     SyncLog,
     SyncStatus,
 )
+from app.models.user import User
 from app.services.action_rules import apply_indicators
 from app.services.events import publish_event_sync
 from app.services.names import dedupe, normalize_key
 from app.services.excel_parser import ParsedAction, parse_workbook
+from app.services import graph_files
 from app.workers.celery_app import app
 
 logger = logging.getLogger("worker-ingestion")
@@ -65,7 +69,20 @@ def sync_project_file(self, project_id: str, file_path: str):
         #    Le code projet vient de la base et non du fichier : les numéros y
         #    sont saisis à la main, avec des préfixes parfois erronés (dans le
         #    classeur de P10, des actions sont numérotées « P02 -13 - 1 »).
-        lecture = parse_workbook(file_path, project_code=project.code)
+        # Emails connus : ils départagent les libellés à tiret. « Jean-Pierre »
+        # est une personne si une adresse au même nom existe, deux sinon —
+        # information que le classeur ne porte pas.
+        emails_connus = {
+            email
+            for (email,) in db.query(Responsable.email).filter(Responsable.email.isnot(None))
+        }
+        emails_connus.update(
+            email for (email,) in db.query(User.email).filter(User.email.isnot(None))
+        )
+
+        lecture = parse_workbook(
+            file_path, project_code=project.code, emails_connus=emails_connus
+        )
         parsed_actions = lecture.actions
         if not parsed_actions:
             logger.warning("Aucune action trouvée dans %s", file_path)
@@ -248,8 +265,111 @@ def _sync_responsables(db, action: Action, names: list[str]) -> None:
         deja[cle] = resp
 
 
-@app.task(name="app.workers.ingestion.sync_sharepoint")
-def sync_sharepoint():
-    """Placeholder pour la synchronisation automatique depuis SharePoint."""
-    logger.info("sync_sharepoint appelé — utilisez sync_project_file pour un import ciblé")
-    return {"status": "use_sync_project_file"}
+@app.task(name="app.workers.ingestion.sync_sharepoint", bind=True, max_retries=2)
+def sync_sharepoint(self, only: str | None = None, dry_run: bool = False):
+    """Importe les classeurs de suivi depuis SharePoint.
+
+    Parcourt le dossier racine, retient les dossiers respectant la convention
+    « P01 - Nom », télécharge le classeur le plus récent de chacun et le passe
+    au même chemin d'import que `sync_project_file`. Le parseur et les règles
+    de rapprochement sont donc rigoureusement identiques à ceux de l'import
+    depuis un dossier local — deux implémentations auraient fini par diverger.
+
+    Sens unique : rien n'est écrit dans SharePoint.
+
+    Args:
+        only: ne traiter qu'un projet, par son code (ex. « P10 »).
+        dry_run: parcourir et télécharger sans rien écrire en base.
+    """
+    if not graph_files.is_configured():
+        detail = graph_files.configuration_explanation()
+        logger.warning("sync_sharepoint ignoré : %s", detail)
+        return {"status": "not_configured", "detail": detail}
+
+    try:
+        dossiers = graph_files.list_project_folders()
+    except graph_files.GraphFilesError as erreur:
+        logger.error("Parcours SharePoint impossible : %s", erreur)
+        raise self.retry(exc=erreur, countdown=300)
+
+    if only:
+        dossiers = [d for d in dossiers if d.code.upper() == only.upper()]
+
+    resultats: list[dict] = []
+    # Répertoire temporaire supprimé à la sortie : conserver les classeurs
+    # téléchargés ferait grossir le conteneur sans que personne ne le remarque.
+    with tempfile.TemporaryDirectory(prefix="dsio-sharepoint-") as tampon:
+        racine = Path(tampon)
+        for dossier in dossiers:
+            if not dossier.has_workbook:
+                logger.warning("%s : aucun classeur exploitable", dossier.code)
+                resultats.append({"code": dossier.code, "status": "no_workbook"})
+                continue
+
+            try:
+                local = graph_files.download_item(
+                    dossier.workbook, racine / dossier.code / dossier.workbook.name
+                )
+            except graph_files.GraphFilesError as erreur:
+                logger.error("%s : téléchargement échoué — %s", dossier.code, erreur)
+                resultats.append({"code": dossier.code, "status": "download_failed"})
+                continue
+
+            projet_id = _resoudre_projet(dossier, str(dossier.workbook.web_url or ""), dry_run)
+            if projet_id is None:
+                resultats.append({"code": dossier.code, "status": "project_missing"})
+                continue
+
+            if dry_run:
+                resultats.append(
+                    {"code": dossier.code, "status": "downloaded", "file": dossier.workbook.name}
+                )
+                continue
+
+            try:
+                # Appel direct plutôt que `.delay()` : la tâche courante tient
+                # déjà le fichier téléchargé, qui disparaît avec le répertoire
+                # temporaire dès son retour.
+                sortie = sync_project_file(projet_id, str(local))
+                resultats.append({"code": dossier.code, "status": "synced", "detail": sortie})
+            except Exception:
+                logger.exception("%s : import échoué", dossier.code)
+                resultats.append({"code": dossier.code, "status": "import_failed"})
+
+    return {
+        "status": "ok",
+        "folders": len(dossiers),
+        "results": resultats,
+    }
+
+
+def _resoudre_projet(dossier, source_url: str, dry_run: bool) -> str | None:
+    """Projet correspondant au dossier, créé s'il n'existe pas encore.
+
+    Le code fait foi, pas le nom : les dossiers sont renommés au fil des
+    réorganisations, alors que « P01 » reste « P01 ».
+    """
+    db = SessionLocal()
+    try:
+        projet = db.query(Project).filter(Project.code == dossier.code).first()
+        if projet is None:
+            if dry_run:
+                logger.info("%s : projet à créer (%s)", dossier.code, dossier.name)
+                return None
+            projet = Project(
+                code=dossier.code,
+                name=dossier.name,
+                source_file_path=source_url or f"{dossier.code}/{dossier.folder.name}",
+            )
+            db.add(projet)
+            db.commit()
+            db.refresh(projet)
+            logger.info("Projet créé depuis SharePoint : %s — %s", projet.code, projet.name)
+        elif not dry_run and source_url and projet.source_file_path != source_url:
+            # L'ancre suit le fichier : un classeur déplacé ou renommé ne doit
+            # pas laisser le projet pointer vers une adresse morte.
+            projet.source_file_path = source_url
+            db.commit()
+        return str(projet.id)
+    finally:
+        db.close()

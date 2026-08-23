@@ -159,6 +159,23 @@ class Settings:
     def azure_client_secret(self) -> str:
         return _required("AZURE_CLIENT_SECRET")
 
+    # --- SharePoint (Microsoft Graph, permissions d'application) ---
+    # Hote du tenant, ex. « trimetagroup.sharepoint.com ». Vide, l'integration
+    # fichiers est simplement inactive : l'import depuis un dossier local
+    # continue de fonctionner.
+    sharepoint_hostname: str = os.getenv("SHAREPOINT_HOSTNAME", "").strip()
+    # Chemin du site, ex. « /sites/DSIO ». Vide = site racine du tenant.
+    sharepoint_site_path: str = os.getenv("SHAREPOINT_SITE_PATH", "").strip()
+    # Bibliotheque de documents. Vide = bibliotheque par defaut du site.
+    sharepoint_drive_name: str = os.getenv("SHAREPOINT_DRIVE_NAME", "").strip()
+    sharepoint_root_folder_path: str = os.getenv(
+        "SHAREPOINT_ROOT_FOLDER_PATH", ""
+    ).strip().strip("/")
+
+    @property
+    def sharepoint_configured(self) -> bool:
+        return bool(self.sharepoint_hostname)
+
     # --- RBAC ---
     # Sans ça, le tout premier utilisateur se connecte en `lecteur` et personne
     # ne peut promouvoir personne : /users est réservé aux admins (impasse).

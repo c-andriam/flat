@@ -23,6 +23,7 @@ import {
   projects as projectsApi,
   relances as relancesApi,
   reports as reportsApi,
+  dailyReports as dailyReportsApi,
   responsables as responsablesApi,
   slots as slotsApi,
   users as usersApi,
@@ -65,6 +66,9 @@ import type {
   SlotRequestPayload,
   SlotMovePayload,
   SlotStatus,
+  DailyReport,
+  DailyReportPayload,
+  TodayReport,
 } from './types'
 
 type Query<T> = UseQueryResult<T, ApiError>
@@ -542,5 +546,54 @@ export function useCancelSlotRequest(): Mutation<void, Uuid> {
       ),
     onError: (_error, _vars, snapshot) => restoreSlotLists(client, snapshot),
     onSettled: () => void client.invalidateQueries({ queryKey: queryKeys.slots.all }),
+  })
+}
+
+// ─── Rapports de fin de journée ───
+
+export function useTodayReport(day?: string): Query<TodayReport> {
+  return useQuery({
+    queryKey: queryKeys.dailyReports.today(day),
+    queryFn: ({ signal }) => dailyReportsApi.today(day, signal),
+    // Le bandeau de rappel s'appuie sur `has_content` : le laisser vieillir
+    // ferait réapparaître le rappel à quelqu'un qui vient de saisir.
+    staleTime: 15_000,
+  })
+}
+
+export function useSaveDailyReport(): Mutation<
+  DailyReport,
+  { day: string; payload: DailyReportPayload }
+> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ day, payload }: { day: string; payload: DailyReportPayload }) =>
+      dailyReportsApi.save(day, payload),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.dailyReports.all })
+      // Cocher « terminée » porte l'action à 100 % : compteurs et rapports
+      // consolidés changent avec elle.
+      void client.invalidateQueries({ queryKey: queryKeys.actions.all })
+      void client.invalidateQueries({ queryKey: queryKeys.reports.all })
+    },
+  })
+}
+
+export function useSubmitDailyReport(): Mutation<DailyReport, string> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (day: string) => dailyReportsApi.submit(day),
+    onSuccess: () => void client.invalidateQueries({ queryKey: queryKeys.dailyReports.all }),
+  })
+}
+
+export function useDailyReportHistory(params: {
+  from: string
+  to: string
+  user_id?: string | null
+}): Query<DailyReport[]> {
+  return useQuery({
+    queryKey: queryKeys.dailyReports.history(params),
+    queryFn: ({ signal }) => dailyReportsApi.history(params, signal),
   })
 }

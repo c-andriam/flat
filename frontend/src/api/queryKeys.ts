@@ -51,6 +51,12 @@ export const queryKeys = {
     requests: (params: object) => ['slots', 'requests', params] as const,
   },
 
+  dailyReports: {
+    all: ['daily-reports'] as const,
+    today: (day: string | undefined) => ['daily-reports', 'today', day ?? 'auto'] as const,
+    history: (params: object) => ['daily-reports', 'history', params] as const,
+  },
+
   logs: {
     sync: (limit: number) => ['logs', 'sync', limit] as const,
     relances: (limit: number) => ['logs', 'relances', limit] as const,

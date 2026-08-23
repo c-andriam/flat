@@ -8,5 +8,10 @@ from app.models.project import (  # noqa: F401
     SyncStatus,
     action_responsables,
 )
+from app.models.daily_report import (  # noqa: F401
+    DailyReport,
+    DailyReportItem,
+    ReportItemSource,
+)
 from app.models.slot import SLOT_MINUTES, Slot, SlotStatus  # noqa: F401
 from app.models.user import User, UserRole  # noqa: F401

@@ -462,6 +462,77 @@ export interface SlotMovePayload {
   starts_at: IsoDateTime
 }
 
+// ─── Rapports de fin de journée ───
+
+export type ReportItemSource = 'action' | 'manual'
+
+export interface ReportItem {
+  id: Uuid
+  action_id: Uuid | null
+  source: ReportItemSource
+  label: string
+  done: boolean
+  position: number
+}
+
+export interface DailyReport {
+  id: Uuid
+  user_id: Uuid
+  user_display_name: string | null
+  report_date: IsoDate
+  note: string | null
+  submitted_at: IsoDateTime | null
+  items: ReportItem[]
+  created_at: IsoDateTime
+  updated_at: IsoDateTime
+}
+
+export const SUGGESTION_REASONS = ['deadline_today', 'touched_today', 'carry_over'] as const
+export type SuggestionReasonCode = (typeof SUGGESTION_REASONS)[number]
+
+/**
+ * Motif pour lequel une action est proposée à la déclaration.
+ *
+ * `label` vient du serveur : un code inconnu d'une version plus récente reste
+ * affichable, faute de quoi l'interface tomberait sur une case vide.
+ */
+export interface SuggestionReason {
+  code: SuggestionReasonCode
+  label: string
+}
+
+export interface ReportSuggestion {
+  action_id: Uuid
+  numero: string
+  description: string
+  project_code: string | null
+  progress: number
+  deadline: IsoDate | null
+  reasons: SuggestionReason[]
+  already_added: boolean
+}
+
+export interface TodayReport {
+  report_date: IsoDate
+  report: DailyReport | null
+  suggestions: ReportSuggestion[]
+  /** Au moins une ligne ou une note — c'est ce qui fait taire le rappel. */
+  has_content: boolean
+}
+
+/** Ligne envoyée au serveur. `id` absent pour une ligne créée à l'instant. */
+export interface ReportItemPayload {
+  id?: Uuid
+  action_id?: Uuid | null
+  label: string
+  done: boolean
+}
+
+export interface DailyReportPayload {
+  items: ReportItemPayload[]
+  note?: string | null
+}
+
 // ─── Pagination ───
 
 /** Résultat d'une liste paginée : `total` vient de l'en-tête `X-Total-Count`. */

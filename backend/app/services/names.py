@@ -27,6 +27,11 @@ _NON_ALPHANUM = re.compile(r"[^a-z0-9]")
 #: « Teknet » et « Peter » seraient coupés en deux.
 _SEPARATEURS = re.compile(r"\s*(?:/|,|&|\+|-|\bet\b)\s*", re.IGNORECASE)
 
+#: Séparateurs sans ambiguïté possible — le tiret en est volontairement exclu.
+#: Une virgule ou une esperluette dans une entrée de liste trahit un appel
+#: fautif ; un tiret peut simplement être un prénom composé.
+_SEPARATEURS_FORTS = re.compile(r"\s*(?:/|,|&|\+|\bet\b)\s*", re.IGNORECASE)
+
 
 def normalize_key(nom: str | None) -> str:
     """Clé de rapprochement d'un nom de personne.
@@ -83,3 +88,61 @@ def split_personnes(libelle: str) -> list[str]:
     if normalize_key(libelle) in noms_insecables():
         return [libelle]
     return dedupe(morceau.strip(" .;-") for morceau in _SEPARATEURS.split(libelle))
+
+
+def contient_separateur_fort(libelle: str) -> bool:
+    """Le libellé contient-il un séparateur qui ne peut pas être un nom ?
+
+    Sert à distinguer une erreur d'appel d'une ambiguïté légitime. Dans une
+    liste `responsable_names`, l'appelant a déjà séparé les personnes : y
+    trouver « Andry, Xavier » est une faute qu'il vaut mieux signaler que
+    corriger en silence. Un tiret, lui, ne prouve rien.
+    """
+    libelle = str(libelle or "").strip()
+    if not libelle:
+        return False
+    return len([m for m in _SEPARATEURS_FORTS.split(libelle) if m.strip()]) > 1
+
+
+def email_designe(email: str | None, libelle: str) -> bool:
+    """L'adresse email désigne-t-elle la personne nommée par ce libellé ?
+
+    La partie locale de l'adresse est normalisée comme un nom — accents et
+    ponctuation retirés — puis comparée en préfixe :
+
+        « Jean-Pierre » + jeanpierre.eloi@…   -> vrai  (une personne)
+        « karine - hassen » + karine.raz@…    -> faux  (deux personnes)
+
+    Le sens de la comparaison compte. On demande que l'adresse *commence* par
+    le nom concaténé, et non l'inverse : « karineraz » ne commence pas par
+    « karinehassen », alors que « karinehassen » commencerait bien par
+    « karine » et ferait passer deux personnes pour une seule.
+    """
+    if not email or "@" not in email:
+        return False
+    local = normalize_key(email.split("@", 1)[0])
+    cle = normalize_key(libelle)
+    if not local or not cle:
+        return False
+    return local.startswith(cle)
+
+
+def personnes_du_libelle(libelle: str, emails_connus) -> list[str]:
+    """Personnes désignées par un libellé, à la lumière des emails connus.
+
+    `split_personnes` traite le tiret comme un séparateur, ce qui est correct
+    pour « karine - hassen » et faux pour « Jean-Pierre ». Départager les deux
+    demande une information que le libellé ne porte pas : l'existence d'une
+    adresse email au même nom. C'est pourquoi cette décision ne peut pas être
+    prise dans un validateur de schéma, qui s'exécute avant tout accès aux
+    données.
+    """
+    libelle = str(libelle or "").strip()
+    if not libelle:
+        return []
+    morceaux = split_personnes(libelle)
+    if len(morceaux) <= 1:
+        return morceaux or [libelle]
+    if any(email_designe(email, libelle) for email in emails_connus):
+        return [libelle]
+    return morceaux

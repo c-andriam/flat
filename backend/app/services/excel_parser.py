@@ -37,11 +37,11 @@ import unicodedata
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Collection, Any
 
 import openpyxl
 
-from app.services.names import split_personnes
+from app.services.names import personnes_du_libelle, split_personnes
 
 logger = logging.getLogger("excel-parser")
 
@@ -252,18 +252,27 @@ def _nettoyer_nom(nom: str) -> str:
     return re.sub(r"\s+", " ", nom.replace("\n", " ")).strip(" .;-")
 
 
-def _parse_responsables(valeur: Any) -> list[str]:
+def _parse_responsables(valeur: Any, emails_connus: Collection[str] = ()) -> list[str]:
     """Liste des responsables d'une cellule, dédoublonnée.
 
     Le rapprochement ignore casse, accents, espaces et ponctuation : « xavier »
     et « Xavier », « AndryII » et « Andry II » désignent la même personne. Les
     compter pour deux créerait deux fiches, donc deux relances distinctes.
+
+    Une cellule est du texte libre : « karine - hassen » y désigne bien deux
+    personnes. Mais « Jean-Pierre » n'en désigne qu'une, et rien dans le
+    libellé ne les distingue. `emails_connus` tranche : une adresse dont la
+    partie locale commence par le nom concaténé prouve qu'il s'agit d'une
+    seule personne.
     """
     if not valeur:
         return []
     # Une seule définition des séparateurs, dans `services/names` : dupliquée
     # ici, elle avait déjà divergé de celle utilisée par la validation d'API.
-    return split_personnes(_nettoyer_nom(str(valeur)))
+    libelle = _nettoyer_nom(str(valeur))
+    if not emails_connus:
+        return split_personnes(libelle)
+    return personnes_du_libelle(libelle, emails_connus)
 
 
 def normalize_numero(brut: Any) -> str:
@@ -447,8 +456,14 @@ def parse_workbook(
     file_path: str | Path,
     project_code: str | None = None,
     sheet_name: str | None = None,
+    emails_connus: Collection[str] = (),
 ) -> ParseResult:
-    """Lit un classeur de suivi et renvoie ses actions avec un diagnostic."""
+    """Lit un classeur de suivi et renvoie ses actions avec un diagnostic.
+
+    `emails_connus` sert à départager les libellés à tiret : « Jean-Pierre »
+    est une personne si une adresse au même nom existe, deux sinon. Omis, le
+    tiret est traité comme un séparateur — le comportement d'avant.
+    """
     chemin = Path(file_path)
     if not chemin.exists():
         raise FileNotFoundError(f"Fichier introuvable : {chemin}")
@@ -614,7 +629,9 @@ def parse_workbook(
                     phase=phase,
                     section=section_courante,
                     description=description,
-                    responsable_names=_parse_responsables(valeur(ligne, "responsables")),
+                    responsable_names=_parse_responsables(
+                        valeur(ligne, "responsables"), emails_connus
+                    ),
                     resp_suivi=_nettoyer_nom(str(valeur(ligne, "resp_suivi") or "")) or None,
                     progress=_pourcentage(cellule_de(ligne, "progress")),
                     spi=_ratio(cellule_de(ligne, "spi")),

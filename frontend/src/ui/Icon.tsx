@@ -156,10 +156,42 @@ export const IconClock = (props: IconProps) => (
   </Svg>
 )
 
+/**
+ * Coche Octicons (`check`, 16 px) — celle de GitHub.
+ *
+ * Les Octicons sont des tracés **pleins** sur une grille de 16, là où le reste
+ * du jeu est en contour sur une grille de 24 : d'où ce conteneur distinct.
+ * Un chemin plein reste net à 12 px, alors qu'une coche en contour y devient
+ * pâteuse — c'est précisément ce qui la rendait peu lisible.
+ *
+ * Aucune couleur propre : elle hérite de `currentColor`, et se colore donc du
+ * texte qui l'entoure.
+ */
+function Octicon({ size = 16, children, ...props }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      aria-hidden="true"
+      focusable="false"
+      {...props}
+    >
+      {children}
+    </svg>
+  )
+}
+
+export const IconCheck = (props: IconProps) => (
+  <Octicon {...props}>
+    <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z" />
+  </Octicon>
+)
+
 export const IconCheckCircle = (props: IconProps) => (
-  <Svg {...props}>
-    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-    <polyline points="22 4 12 14.01 9 11.01" />
+  <Svg strokeWidth={1.5} {...props}>
+    <path d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
   </Svg>
 )
 
@@ -216,6 +248,14 @@ export const IconTrash = (props: IconProps) => (
   <Svg {...props}>
     <polyline points="3 6 5 6 21 6" />
     <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+  </Svg>
+)
+
+export const IconClipboard = (props: IconProps) => (
+  <Svg {...props}>
+    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+    <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
+    <path d="M9 14l2 2 4-4" />
   </Svg>
 )
 

@@ -5,7 +5,7 @@ from datetime import date, datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.project import ActionStatus, SyncStatus
-from app.services.names import dedupe, split_personnes
+from app.services.names import contient_separateur_fort, dedupe, split_personnes
 
 # Validation d'email volontairement permissive : elle rejette les fautes de
 # frappe évidentes (« jean.dupont@ », « trimeta.mg ») sans embarquer la
@@ -172,7 +172,13 @@ class ActionCreate(ActionBase, RefuseChampsCalcules):
         # Dédoublonnage insensible à la casse : « Xavier » et « xavier »
         # désignent la même personne, et deux fiches responsable signifient
         # deux relances pour la même action.
-        composites = [n for n in values if n and len(split_personnes(n)) > 1]
+        # Seuls les séparateurs francs sont refusés. Le tiret ne l'est plus :
+        # « Jean-Pierre » est un prénom, et trancher entre lui et
+        # « karine - hassen » demande de consulter les emails connus — ce
+        # qu'un validateur de schéma, exécuté avant tout accès aux données,
+        # ne peut pas faire. L'arbitrage a lieu à la lecture des classeurs,
+        # seul endroit où un libellé composite arrive vraiment.
+        composites = [n for n in values if n and contient_separateur_fort(n)]
         if composites:
             # Ne pas découper en silence : la liste est explicite côté API, une
             # entrée composite est une erreur d'appel. Les classeurs Excel, eux,
@@ -240,7 +246,13 @@ class ActionUpdate(PartialUpdate):
         # responsable, donc deux relances pour la même action.
         if values is None:
             return None
-        composites = [n for n in values if n and len(split_personnes(n)) > 1]
+        # Seuls les séparateurs francs sont refusés. Le tiret ne l'est plus :
+        # « Jean-Pierre » est un prénom, et trancher entre lui et
+        # « karine - hassen » demande de consulter les emails connus — ce
+        # qu'un validateur de schéma, exécuté avant tout accès aux données,
+        # ne peut pas faire. L'arbitrage a lieu à la lecture des classeurs,
+        # seul endroit où un libellé composite arrive vraiment.
+        composites = [n for n in values if n and contient_separateur_fort(n)]
         if composites:
             # Ne pas découper en silence : la liste est explicite côté API, une
             # entrée composite est une erreur d'appel. Les classeurs Excel, eux,

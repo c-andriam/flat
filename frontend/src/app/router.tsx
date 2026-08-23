@@ -5,6 +5,7 @@ import { DashboardLayout } from '@/components/layout/DashboardLayout'
 import { RootLayout } from '@/components/layout/RootLayout'
 import { ActionsPage } from '@/pages/ActionsPage'
 import { AgendaPage } from '@/pages/AgendaPage'
+import { DailyReportPage } from '@/pages/DailyReportPage'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { HomePage } from '@/pages/HomePage'
 import { LoginPage } from '@/pages/LoginPage'
@@ -43,6 +44,7 @@ export const router = createBrowserRouter([
           { path: '/responsables', element: <ResponsablesPage /> },
           { path: '/rapports', element: <RapportsPage /> },
           { path: '/creneaux', element: <SlotsPage /> },
+          { path: '/rapport-du-jour', element: <DailyReportPage /> },
         ],
       },
       // Anciennes routes du frontend Jinja.

@@ -45,6 +45,9 @@ import type {
   SlotMovePayload,
   SlotStatus,
   CurrentUser,
+  DailyReport,
+  DailyReportPayload,
+  TodayReport,
 } from './types'
 
 // ─── Authentification ───
@@ -230,9 +233,28 @@ export const slots = {
   cancel: (groupId: Uuid) => requestVoid(`/slots/requests/${groupId}`, { method: 'DELETE' }),
 }
 
+// ─── Rapports de fin de journée ───
+
+export const dailyReports = {
+  today: (day: string | undefined, signal?: AbortSignal) =>
+    request<TodayReport>('/daily-reports/today', { query: day ? { day } : {}, signal }),
+
+  save: (day: string, payload: DailyReportPayload) =>
+    request<DailyReport>(`/daily-reports/${day}`, { method: 'PUT', body: payload }),
+
+  submit: (day: string) =>
+    request<DailyReport>(`/daily-reports/${day}/submit`, { method: 'POST' }),
+
+  remove: (day: string) => requestVoid(`/daily-reports/${day}`, { method: 'DELETE' }),
+
+  history: (params: { from: string; to: string; user_id?: Uuid | null }, signal?: AbortSignal) =>
+    request<DailyReport[]>('/daily-reports', { query: params, signal }),
+}
+
 export const api = {
   auth,
   slots,
+  dailyReports,
   projects,
   actions,
   responsables,
