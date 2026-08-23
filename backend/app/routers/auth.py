@@ -13,9 +13,11 @@ from sqlalchemy.future import select
 from app.config import settings
 from app.database import get_async_db
 from app.models.user import User, UserRole
-from app.schemas.user_schema import UserOut
+from app.models.project import Responsable
+from app.schemas.user_schema import CurrentUserOut, LinkedResponsableOut, UserOut
 from app.services import microsoft
 from app.services.rate_limit import limiter
+from app.services.scoping import responsable_ids_for, sees_all_data
 from app.services.security import create_access_token, get_current_user
 
 logger = logging.getLogger("dsio.auth")
@@ -202,15 +204,41 @@ async def callback(
 
 @router.get(
     "/me",
-    response_model=UserOut,
+    response_model=CurrentUserOut,
     summary="Profil de l'utilisateur connecté",
     description=(
         "Retourne l'identité et le rôle de l'utilisateur associé au JWT fourni "
         "dans le header `Authorization`. Le rôle est relu en base à chaque "
-        "appel : une rétrogradation prend effet immédiatement."
+        "appel : une rétrogradation prend effet immédiatement.\n\n"
+        "`sees_all_data` et `linked_responsables` décrivent le périmètre de "
+        "lecture : une interface peut ainsi expliquer une liste vide plutôt "
+        "que de la laisser passer pour une panne."
     ),
     response_description="Informations du compte courant.",
     responses={401: {"description": "Jeton absent, invalide ou expiré."}},
 )
-def me(current_user: User = Depends(get_current_user)):
-    return current_user
+async def me(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    # Les fiches rattachées sont résolues même pour un compte qui voit tout :
+    # elles ne servent pas qu'au cloisonnement, elles permettent aussi de
+    # mettre en avant *ses* échéances dans un agenda qui les affiche toutes.
+    complet = sees_all_data(current_user)
+    fiches: list[LinkedResponsableOut] = []
+    ids = await responsable_ids_for(db, current_user)
+    if ids:
+        result = await db.execute(
+            select(Responsable)
+            .where(Responsable.id.in_(ids))
+            .order_by(Responsable.display_name)
+        )
+        fiches = [
+            LinkedResponsableOut.model_validate(fiche) for fiche in result.scalars().all()
+        ]
+
+    return CurrentUserOut(
+        **UserOut.model_validate(current_user).model_dump(),
+        sees_all_data=complet,
+        linked_responsables=fiches,
+    )

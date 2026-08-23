@@ -32,9 +32,11 @@ from app.schemas.project_schema import (
     SyncLogOut,
 )
 from app.schemas.report_schema import ActionSummaryOut
+from app.services.cache import get_or_set
 from app.services.action_queries import (
     ActionView,
     build_actions_query,
+    count_all_views,
     default_order,
 )
 from app.services.action_rules import (
@@ -47,6 +49,7 @@ from app.services.action_rules import (
 from app.services.events import publish_event
 from app.services.names import dedupe, normalize_key
 from app.services.health import perform_health_check_async
+from app.services.scoping import Scope, get_scope
 from app.services.security import require_reader, require_writer
 
 router = APIRouter(tags=["core"])
@@ -247,14 +250,27 @@ async def list_projects(
     limit: int = _limit_param(),
     offset: int = _OFFSET_PARAM,
     db: AsyncSession = Depends(get_async_db),
+    scope: Scope = Depends(get_scope),
 ):
     stmt = select(Project)
     if is_active is not None:
         stmt = stmt.filter(Project.is_active.is_(is_active))
+    condition = scope.projects()
+    if condition is not None:
+        stmt = stmt.filter(condition)
 
     response.headers["X-Total-Count"] = str(await _count(db, stmt))
     result = await db.execute(stmt.order_by(Project.code).limit(limit).offset(offset))
     return result.scalars().all()
+
+
+async def _dans_le_perimetre(db: AsyncSession, scope: Scope, action_id: uuid.UUID) -> bool:
+    """L'action fait-elle partie de ce que l'appelant a le droit de lire ?"""
+    condition = scope.actions()
+    if condition is None:
+        return True
+    result = await db.execute(select(Action.id).where(Action.id == action_id, condition))
+    return result.first() is not None
 
 
 @router.get(
@@ -273,6 +289,7 @@ async def list_projects(
 async def get_project(
     project_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) du projet."),
     db: AsyncSession = Depends(get_async_db),
+    scope: Scope = Depends(get_scope),
 ):
     result = await db.execute(
         select(Project)
@@ -282,6 +299,21 @@ async def get_project(
     project = result.scalars().first()
     if not project:
         raise HTTPException(status_code=404, detail="Projet introuvable")
+
+    if not scope.unrestricted:
+        # La fiche projet expose la liste complète de ses actions : sans ce
+        # filtrage, elle contournait le cloisonnement appliqué à /actions.
+        autorises = set(scope.responsable_ids)
+        project.actions = [
+            action
+            for action in project.actions
+            if autorises.intersection(r.id for r in action.responsables)
+        ]
+        if not project.actions:
+            # Aucun rattachement : le projet n'a pas à apparaître, et un 403
+            # confirmerait son existence.
+            raise HTTPException(status_code=404, detail="Projet introuvable")
+
     return project
 
 
@@ -421,12 +453,39 @@ _WEEKS_AHEAD_PARAM = Query(
 )
 
 
-async def _run_actions_query(db: AsyncSession, response: Response, stmt, limit: int, offset: int):
-    """Compte, trie, pagine et charge les responsables en une seule fois."""
-    response.headers["X-Total-Count"] = str(await _count(db, stmt))
+async def _run_actions_query(
+    db: AsyncSession, response: Response, stmt, limit: int, offset: int, scope: Scope
+):
+    """Trie, pagine, compte et charge les responsables.
+
+    Le périmètre est appliqué ici plutôt que dans chaque route : une vue
+    raccourcie oubliée aurait sinon divulgué tout le portefeuille.
+
+    Le total accompagne les lignes via `COUNT(*) OVER ()` au lieu d'une requête
+    dédiée. Une fonction fenêtre est évaluée avant le `LIMIT`, elle donne donc
+    bien le total d'avant pagination — pour un aller-retour de moins, ce qui se
+    voit sur une base distante.
+    """
+    condition = scope.actions()
+    if condition is not None:
+        stmt = stmt.where(condition)
+
     stmt = default_order(stmt).options(selectinload(Action.responsables))
-    result = await db.execute(stmt.limit(limit).offset(offset))
-    return result.scalars().unique().all()
+    result = await db.execute(
+        stmt.add_columns(func.count().over().label("total")).limit(limit).offset(offset)
+    )
+    lignes = result.unique().all()
+
+    if lignes:
+        response.headers["X-Total-Count"] = str(lignes[0][1])
+    else:
+        # Aucune ligne : la fonction fenêtre n'a rien renvoyé et le total est
+        # inconnu. Sur une page au-delà du dernier élément, il n'est pas nul
+        # pour autant — un COUNT dédié tranche, dans le seul cas où il compte.
+        total = 0 if offset == 0 else await _count(db, stmt.order_by(None))
+        response.headers["X-Total-Count"] = str(total)
+
+    return [ligne[0] for ligne in lignes]
 
 
 @router.get(
@@ -468,6 +527,7 @@ async def list_actions(
     limit: int = _limit_param(),
     offset: int = _OFFSET_PARAM,
     db: AsyncSession = Depends(get_async_db),
+    scope: Scope = Depends(get_scope),
 ):
     # `overdue_only` est conservé pour ne pas casser les clients écrits avant
     # l'arrivée de `view`.
@@ -485,7 +545,7 @@ async def list_actions(
         due_soon_days=due_soon_days,
         weeks_ahead=weeks_ahead,
     )
-    return await _run_actions_query(db, response, stmt, limit, offset)
+    return await _run_actions_query(db, response, stmt, limit, offset, scope)
 
 
 @router.get(
@@ -509,27 +569,46 @@ async def actions_summary(
     due_soon_days: int = _DUE_SOON_PARAM,
     weeks_ahead: int = _WEEKS_AHEAD_PARAM,
     db: AsyncSession = Depends(get_async_db),
+    scope: Scope = Depends(get_scope),
 ):
-    compteurs: dict[str, int] = {}
-    for vue in ActionView:
-        stmt = build_actions_query(
-            view=vue,
-            project_id=project_id,
-            responsable_id=responsable_id,
-            active_projects_only=active_projects_only,
-            due_soon_days=due_soon_days,
-            weeks_ahead=weeks_ahead,
-        )
-        compteurs[vue.value] = await _count(db, stmt)
+    async def calculer() -> ActionSummaryOut:
+        ligne = (
+            await db.execute(
+                count_all_views(
+                    project_id=project_id,
+                    responsable_id=responsable_id,
+                    active_projects_only=active_projects_only,
+                    due_soon_days=due_soon_days,
+                    weeks_ahead=weeks_ahead,
+                    extra_condition=scope.actions(),
+                )
+            )
+        ).one()
+        compteurs = {vue.value: int(getattr(ligne, vue.value) or 0) for vue in ActionView}
 
-    ouvertes = compteurs[ActionView.OPEN.value]
-    en_retard = compteurs[ActionView.OVERDUE.value]
-    return ActionSummaryOut(
-        generated_at=datetime.now(timezone.utc),
-        counts=compteurs,
-        # Part des actions ouvertes qui sont en retard : l'indicateur que
-        # regarde un chef de projet avant tout le reste.
-        overdue_ratio=round(en_retard / ouvertes * 100, 1) if ouvertes else 0.0,
+        ouvertes = compteurs[ActionView.OPEN.value]
+        en_retard = compteurs[ActionView.OVERDUE.value]
+        return ActionSummaryOut(
+            generated_at=datetime.now(timezone.utc),
+            counts=compteurs,
+            # Part des actions ouvertes qui sont en retard : l'indicateur que
+            # regarde un chef de projet avant tout le reste.
+            overdue_ratio=round(en_retard / ouvertes * 100, 1) if ouvertes else 0.0,
+        )
+
+    return await get_or_set(
+        "actions-summary",
+        scope_token=scope.cache_token,
+        params={
+            "project_id": project_id,
+            "responsable_id": responsable_id,
+            "active_projects_only": active_projects_only,
+            "due_soon_days": due_soon_days,
+            "weeks_ahead": weeks_ahead,
+        },
+        producer=calculer,
+        serialize=lambda valeur: valeur.model_dump_json(),
+        deserialize=ActionSummaryOut.model_validate_json,
     )
 
 
@@ -574,6 +653,7 @@ def _enregistrer_vue(chemin: str, vue: ActionView, resume: str, details: str) ->
             limit: int = _limit_param(),
             offset: int = _OFFSET_PARAM,
             db: AsyncSession = Depends(get_async_db),
+            scope: Scope = Depends(get_scope),
         ):
             stmt = build_actions_query(
                 view=vue,
@@ -582,7 +662,7 @@ def _enregistrer_vue(chemin: str, vue: ActionView, resume: str, details: str) ->
                 active_projects_only=active_projects_only,
                 due_soon_days=due_soon_days,
             )
-            return await _run_actions_query(db, response, stmt, limit, offset)
+            return await _run_actions_query(db, response, stmt, limit, offset, scope)
 
     elif vue is ActionView.UPCOMING:
 
@@ -596,6 +676,7 @@ def _enregistrer_vue(chemin: str, vue: ActionView, resume: str, details: str) ->
             limit: int = _limit_param(),
             offset: int = _OFFSET_PARAM,
             db: AsyncSession = Depends(get_async_db),
+            scope: Scope = Depends(get_scope),
         ):
             stmt = build_actions_query(
                 view=vue,
@@ -604,7 +685,7 @@ def _enregistrer_vue(chemin: str, vue: ActionView, resume: str, details: str) ->
                 active_projects_only=active_projects_only,
                 weeks_ahead=weeks_ahead,
             )
-            return await _run_actions_query(db, response, stmt, limit, offset)
+            return await _run_actions_query(db, response, stmt, limit, offset, scope)
 
     else:
 
@@ -617,6 +698,7 @@ def _enregistrer_vue(chemin: str, vue: ActionView, resume: str, details: str) ->
             limit: int = _limit_param(),
             offset: int = _OFFSET_PARAM,
             db: AsyncSession = Depends(get_async_db),
+            scope: Scope = Depends(get_scope),
         ):
             stmt = build_actions_query(
                 view=vue,
@@ -624,7 +706,7 @@ def _enregistrer_vue(chemin: str, vue: ActionView, resume: str, details: str) ->
                 responsable_id=responsable_id,
                 active_projects_only=active_projects_only,
             )
-            return await _run_actions_query(db, response, stmt, limit, offset)
+            return await _run_actions_query(db, response, stmt, limit, offset, scope)
 
 
 _VUES_RACCOURCIES = [
@@ -682,9 +764,14 @@ for _chemin, _vue, _resume, _details in _VUES_RACCOURCIES:
 async def get_action(
     action_id: uuid.UUID = Path(..., description="Identifiant unique (UUID) de l'action."),
     db: AsyncSession = Depends(get_async_db),
+    scope: Scope = Depends(get_scope),
 ):
     action = await _load_action(db, action_id)
     if not action:
+        raise HTTPException(status_code=404, detail="Action introuvable")
+    if not await _dans_le_perimetre(db, scope, action_id):
+        # 404 et non 403 : repondre « interdit » confirmerait l'existence de
+        # l'action, donc du travail confie a quelqu'un d'autre.
         raise HTTPException(status_code=404, detail="Action introuvable")
     return action
 

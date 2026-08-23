@@ -3,6 +3,8 @@
 # ==============================================================================
 COMPOSE		= podman-compose
 PODMAN		= podman
+# Point d'entrée public de la stack (gateway nginx, TLS auto-signé)
+FRONTEND_URL	= https://localhost:8443
 
 # Couleurs pour un affichage plus lisible
 GREEN		= \033[1;32m
@@ -13,18 +15,30 @@ NC			= \033[0m
 # ==============================================================================
 # Règles principales
 # ==============================================================================
-.PHONY: all build up down start stop status logs clean fclean re migrate makemigrations db-update db-shell test test-unit token doctor up-local down-local migrate-local import
+.PHONY: all build up down start stop status logs clean fclean re migrate makemigrations db-update db-shell test test-unit token doctor up-local down-local migrate-local import front-install front-dev front-build front-lint front-check ensure-backend-image login
 
 # Règle par défaut
 all: up
 
-# Construit ou reconstruit les services
+# Construit ou reconstruit les services.
+# Deux images seulement : `dsio-backend` (partagée par les six conteneurs
+# Python) et le frontend. Les cinq services backend sans `build:` la
+# réutilisent, voir le commentaire sur core-api dans compose.yml.
 build:
 	@echo "$(YELLOW) Construction des images Podman...$(NC)"
 	$(COMPOSE) build
 
+# Garde-fou : les services backend autres que core-api n'ont pas de `build:`.
+# Sans cette vérification, un `make up` sur une machine fraîche tenterait de
+# tirer `dsio-backend:latest` depuis un registre distant, où elle n'existe pas.
+ensure-backend-image:
+	@$(PODMAN) image exists dsio-backend:latest 2>/dev/null || { \
+		echo "$(YELLOW) Image backend absente — construction préalable...$(NC)"; \
+		$(COMPOSE) build core-api; \
+	}
+
 # Crée et démarre les conteneurs en arrière-plan
-up:
+up: ensure-backend-image
 	@echo "$(GREEN) Démarrage de l'infrastructure en arrière-plan...$(NC)"
 	$(COMPOSE) up -d
 
@@ -141,6 +155,9 @@ doctor:
 # toutes les routes metier exigent desormais un jeton.
 #   make token EMAIL=prenom.nom@trimeta.mg
 #   make token EMAIL=lecteur@trimeta.mg ROLE=lecteur
+# Roles : admin | responsable_si | lecteur | dsio
+# `dsio` est le seul (avec `admin`) a pouvoir ouvrir des creneaux de
+# rendez-vous et arbitrer les demandes.
 ROLE ?= admin
 token:
 	@if [ -z "$(EMAIL)" ]; then \
@@ -149,6 +166,30 @@ token:
 		exit 1; \
 	fi
 	@$(PODMAN) exec dsio-core-api python3 scripts/issue_token.py "$(EMAIL)" --role "$(ROLE)"
+
+# Ouvre la SPA déjà authentifiée, sans passer par le SSO Microsoft.
+# Le jeton part dans le fragment d'URL (#token=...), exactement comme le fait
+# /auth/callback : la SPA le consomme au premier rendu puis nettoie la barre
+# d'adresse. Réservé au poste de développement — un jeton vaut un mot de passe.
+#   make login EMAIL=prenom.nom@trimeta.mg
+#   make login EMAIL=lecteur@trimeta.mg ROLE=lecteur
+#   make login EMAIL=dsio@trimeta.mg ROLE=dsio   (vue « ouvrir des creneaux »)
+login:
+	@if [ -z "$(EMAIL)" ]; then \
+		echo "$(RED) EMAIL est requis.$(NC)"; \
+		echo "   exemple : make login EMAIL=prenom.nom@trimeta.mg"; \
+		exit 1; \
+	fi
+	@$(PODMAN) container exists dsio-core-api 2>/dev/null || { \
+		echo "$(RED) La stack n'est pas démarrée — lancer d'abord : make up$(NC)"; \
+		exit 1; \
+	}
+	@TOKEN=$$($(PODMAN) exec dsio-core-api python3 scripts/issue_token.py "$(EMAIL)" --role "$(ROLE)" --quiet) \
+		&& URL="$(FRONTEND_URL)/#token=$$TOKEN" \
+		&& echo "$(GREEN) Ouverture de la SPA authentifiée ($(EMAIL), rôle $(ROLE))...$(NC)" \
+		&& (xdg-open "$$URL" >/dev/null 2>&1 &) \
+		&& echo "   Si rien ne s'ouvre, coller cette URL dans le navigateur :" \
+		&& echo "   $$URL"
 
 # ==============================================================================
 # Tests automatisés
@@ -168,6 +209,36 @@ test:
 test-unit:
 	@echo "$(GREEN) Tests unitaires (sans infrastructure)...$(NC)"
 	$(PODMAN) exec dsio-core-api python3 -m pytest tests/test_unit_*.py
+
+# ==============================================================================
+# Frontend (SPA React + TypeScript)
+# ==============================================================================
+
+FRONT_DIR	= frontend
+
+# Installe les dépendances npm en local (hors conteneur)
+front-install:
+	@echo "$(YELLOW) Installation des dépendances du frontend...$(NC)"
+	cd $(FRONT_DIR) && npm ci
+
+# Serveur de développement Vite avec rechargement à chaud.
+# /api et /ws sont proxifiés vers la gateway (VITE_DEV_GATEWAY, .env.example).
+front-dev:
+	@echo "$(GREEN) Vite en écoute sur http://localhost:5173 ...$(NC)"
+	cd $(FRONT_DIR) && npm run dev
+
+# Compile la SPA dans frontend/dist (ce que fait aussi l'image Docker)
+front-build:
+	@echo "$(YELLOW) Compilation de la SPA...$(NC)"
+	cd $(FRONT_DIR) && npm run build
+
+front-lint:
+	cd $(FRONT_DIR) && npm run lint
+
+# Contrôle complet avant commit : typage strict puis règles ESLint
+front-check:
+	@echo "$(GREEN) Vérification du typage et du lint...$(NC)"
+	cd $(FRONT_DIR) && npm run typecheck && npm run lint
 
 # ==============================================================================
 # Règles de nettoyage

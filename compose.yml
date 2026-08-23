@@ -37,10 +37,8 @@ services:
 
   # Service 4 : Auth & Identity API (SSO Microsoft MSAL & RBAC)
   auth-api:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-      network: host
+    # Image construite par core-api (voir le commentaire là-bas).
+    image: dsio-backend:latest
     container_name: dsio-auth-api
     dns:
       - 10.89.0.1
@@ -63,6 +61,12 @@ services:
 
   # Service 3 : Core API (CRUD Projets, Actions & Audit Logs)
   core-api:
+    # Seul service à porter `build:` : les six conteneurs backend partagent le
+    # même Dockerfile et le même contexte. Les faire construire chacun de leur
+    # côté lançait six `apt-get` et six `pip install` en parallèle, saturant la
+    # connexion jusqu'au timeout PyPI. Une image, six conteneurs — et la
+    # garantie qu'ils tournent tous sur exactement le même code.
+    image: dsio-backend:latest
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -92,10 +96,8 @@ services:
 
   # Service 5 : Real-Time Hub (WebSockets & Diffusion Temps Réel)
   realtime-hub:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-      network: host
+    # Image construite par core-api (voir le commentaire là-bas).
+    image: dsio-backend:latest
     container_name: dsio-realtime-hub
     dns:
       - 10.89.0.1
@@ -123,10 +125,8 @@ services:
 
   # Service 6 : Ingestion & Webhook Worker (Lecture SharePoint -> BDD)
   worker-ingestion:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-      network: host
+    # Image construite par core-api (voir le commentaire là-bas).
+    image: dsio-backend:latest
     container_name: dsio-worker-ingestion
     dns:
       - 10.89.0.1
@@ -148,10 +148,8 @@ services:
 
   # Service 7 : Write-Back Worker (Miroir BDD -> SharePoint par Ancre)
   worker-writeback:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-      network: host
+    # Image construite par core-api (voir le commentaire là-bas).
+    image: dsio-backend:latest
     container_name: dsio-worker-writeback
     dns:
       - 10.89.0.1
@@ -171,10 +169,8 @@ services:
 
   # Service 8 : Notification & Cron Scheduler (Moteur de relance Outlook)
   scheduler-notifications:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-      network: host
+    # Image construite par core-api (voir le commentaire là-bas).
+    image: dsio-backend:latest
     container_name: dsio-scheduler-notifications
     dns:
       - 10.89.0.1
@@ -196,18 +192,27 @@ services:
   # 🌐 1. LA COUCHE D'EXPOSITION (Frontend & Reverse Proxy)
   # =========================================================================
 
-  # Service 2 : Frontend UI (React / Vue + TailwindCSS)
+  # Service 2 : Frontend UI (SPA React + TypeScript + TailwindCSS)
+  # Le build Vite est compilé en statique puis servi par nginx : plus aucun
+  # runtime Python côté frontend. Les appels /api/v1 et /ws restent routés par
+  # la gateway, la SPA les émet en relatif sur la même origine.
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
       network: host
+      args:
+        # Vide = chemins relatifs, résolus par la gateway sur la même origine.
+        VITE_API_BASE_URL: ""
+        VITE_WS_URL: ""
     container_name: dsio-frontend
-    user: "root"
     restart: always
-    command: sh -c "tailwindcss -i ./app/static/css/input.css -o ./app/static/css/output.css --minify && uvicorn app.main:app --host 0.0.0.0 --port 80 --reload"
-    volumes:
-      - ./frontend/app:/app/app:z
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
     networks:
       - dsio-internal-net
 
@@ -226,7 +231,7 @@ services:
       - dsio-internal-net
     depends_on:
       frontend:
-        condition: service_started
+        condition: service_healthy
       core-api:
         condition: service_healthy
       auth-api:

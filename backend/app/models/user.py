@@ -11,6 +11,10 @@ class UserRole(str, enum.Enum):
     ADMIN = "admin"
     RESPONSABLE_SI = "responsable_si"
     LECTEUR = "lecteur"
+    #: Directeur des Systemes d'Information. Seul role — avec `admin` — a
+    #: pouvoir ouvrir des disponibilites et accepter les demandes de
+    #: rendez-vous. Cote projets et actions, il lit sans ecrire.
+    DSIO = "dsio"
 
 
 class User(UUIDMixin, Base):

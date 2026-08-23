@@ -48,8 +48,26 @@ def _json_default(obj):
     raise TypeError(f"Type non sérialisable : {type(obj)}")
 
 
+#: Événements dont l'effet est visible dans les rapports et les compteurs.
+#: Les créneaux de rendez-vous en sont absents : ils changent à chaque
+#: glisser-déposer et ne pèsent sur aucun agrégat métier — purger le cache à
+#: chaque geste l'aurait rendu inutile.
+_EVENEMENTS_INVALIDANTS = ("project_", "action_", "responsable_")
+
+
 async def publish_event(event_type: str, data: dict) -> None:
-    """Publie un événement JSON — ne fait jamais échouer l'appelant."""
+    """Publie un événement JSON — ne fait jamais échouer l'appelant.
+
+    Sert aussi de point d'invalidation du cache de lecture : toute écriture
+    métier passe déjà par ici, ce qui évite d'avoir à y penser dans chaque
+    route — et d'oublier.
+    """
+    if event_type.startswith(_EVENEMENTS_INVALIDANTS):
+        # Import tardif : `cache` dépend de ce module pour son client Redis.
+        from app.services.cache import invalidate
+
+        await invalidate()
+
     try:
         message = json.dumps(
             {"type": event_type, "payload": data}, default=_json_default

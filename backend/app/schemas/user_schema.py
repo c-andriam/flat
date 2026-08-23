@@ -43,3 +43,37 @@ class UserOut(BaseModel):
     is_active: bool
     created_at: datetime
     last_login_at: datetime | None = None
+
+
+class LinkedResponsableOut(BaseModel):
+    """Fiche responsable rattachée au compte, via l'email."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    display_name: str
+
+
+class CurrentUserOut(UserOut):
+    """Profil de l'appelant, enrichi de son périmètre de lecture.
+
+    Séparé de `UserOut` : la liste d'administration renvoie des dizaines de
+    comptes, et calculer le rattachement de chacun coûterait une requête par
+    ligne pour une information que cet écran n'utilise pas.
+    """
+
+    sees_all_data: bool = Field(
+        ...,
+        description=(
+            "Vrai pour les rôles `admin` et `dsio`, qui voient l'ensemble du "
+            "portefeuille. Faux pour les autres, cloisonnés à leurs propres "
+            "actions."
+        ),
+    )
+    linked_responsables: list[LinkedResponsableOut] = Field(
+        default_factory=list,
+        description=(
+            "Fiches responsable portant l'email de ce compte. Vide, un compte "
+            "cloisonné ne voit rien : il faut lui associer son adresse."
+        ),
+    )

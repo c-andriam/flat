@@ -15,7 +15,7 @@ reste dans la requête, y compris quand le portefeuille grossit.
 from datetime import date, timedelta
 from enum import Enum
 
-from sqlalchemy import Select, and_, or_, select
+from sqlalchemy import ColumnElement, Select, and_, func, or_, select
 
 from app.models.project import Action, ActionStatus, Project, Responsable
 from app.services.action_rules import today_utc
@@ -169,6 +169,50 @@ def _view_condition(view: ActionView, today: date, days: int, weeks_ahead: int):
     if view is ActionView.NO_DEADLINE:
         return and_(Action.deadline.is_(None), _open())
     return None  # ActionView.ALL
+
+
+def count_all_views(
+    *,
+    project_id=None,
+    responsable_id=None,
+    active_projects_only: bool = False,
+    due_soon_days: int = 3,
+    weeks_ahead: int = 1,
+    extra_condition: "ColumnElement[bool] | None" = None,
+    today: date | None = None,
+) -> Select:
+    """Compte les actions de **toutes** les vues en une seule requête.
+
+    Onze `COUNT` séquentiels — un par vue — coûtaient onze allers-retours vers
+    la base. Sur une instance distante à ~250 ms de latence, le bandeau de
+    compteurs du tableau de bord mettait près de trois secondes à s'afficher
+    alors que le travail SQL réel est négligeable.
+
+    `COUNT(*) FILTER (WHERE …)` fait le même décompte en une passe sur la
+    table : une requête, un aller-retour, les onze compteurs.
+    """
+    today = today or today_utc()
+
+    colonnes = []
+    for vue in ActionView:
+        condition = _view_condition(vue, today, due_soon_days, weeks_ahead)
+        compteur = func.count() if condition is None else func.count().filter(condition)
+        colonnes.append(compteur.label(vue.value))
+
+    stmt = select(*colonnes).select_from(Action)
+
+    if project_id is not None:
+        stmt = stmt.where(Action.project_id == project_id)
+    if active_projects_only:
+        stmt = stmt.where(
+            Action.project_id.in_(select(Project.id).where(Project.is_active.is_(True)))
+        )
+    if responsable_id is not None:
+        stmt = stmt.where(Action.responsables.any(Responsable.id == responsable_id))
+    if extra_condition is not None:
+        stmt = stmt.where(extra_condition)
+
+    return stmt
 
 
 def build_actions_query(

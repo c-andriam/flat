@@ -81,6 +81,18 @@ class Settings:
     db_pool_size: int = _int("DB_POOL_SIZE", 5)
     db_max_overflow: int = _int("DB_MAX_OVERFLOW", 5)
     db_pool_recycle: int = _int("DB_POOL_RECYCLE", 1800)
+    # Verification « la connexion est-elle encore vivante ? » avant chaque
+    # emprunt au pool. Elle protege des coupures du pooler Supabase, mais
+    # coute un aller-retour complet : mesure a ~780 ms par requete depuis
+    # Madagascar, soit la moitie du temps de reponse de l'API. La passer a
+    # false accelere nettement, au prix d'erreurs sporadiques si le pooler
+    # ferme une connexion inactive.
+    db_pool_pre_ping: bool = _bool("DB_POOL_PRE_PING", True)
+    # Duree de mise en cache du profil d'un compte (role, activation), en
+    # secondes. Chaque requete relisait ce profil en base : un aller-retour
+    # complet, soit environ un tiers du temps de reponse. 0 desactive le cache
+    # et retablit la relecture systematique.
+    auth_cache_ttl_seconds: int = _int("AUTH_CACHE_TTL_SECONDS", 30)
     # `require` par defaut : Supabase impose TLS. Une instance PostgreSQL
     # locale de developpement n'a pas de certificat, d'ou `disable` — la
     # valeur etait codee en dur, ce qui rendait tout travail hors ligne

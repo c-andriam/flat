@@ -10,6 +10,7 @@ from app.database import get_async_db
 from app.models.user import User, UserRole
 from app.schemas.user_schema import UserOut, UserUpdate
 from app.services.security import require_admin
+from app.services.security import purger_profil
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -131,6 +132,9 @@ async def update_user(
         raise HTTPException(status_code=409, detail="Conflit lors de la mise à jour")
 
     await db.refresh(user)
+    # Le profil est mis en cache quelques secondes : sans cette purge, une
+    # rétrogradation resterait sans effet pendant la durée de vie de l'entrée.
+    await purger_profil(user.id)
     return user
 
 
@@ -177,3 +181,4 @@ async def delete_user(
 
     await db.delete(user)
     await db.commit()
+    await purger_profil(user.id)

@@ -26,7 +26,9 @@ _POOL_KWARGS = {
     # Le pooler Supabase coupe les connexions inactives : les recycler avant
     # évite les "server closed the connection unexpectedly" en production.
     "pool_recycle": settings.db_pool_recycle,
-    "pool_pre_ping": True,
+    # Réglable : la sonde de vivacité coûte un aller-retour complet avant
+    # chaque requête (voir DB_POOL_PRE_PING dans .env.example).
+    "pool_pre_ping": settings.db_pool_pre_ping,
     "echo": settings.db_echo,
 }
 

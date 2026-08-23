@@ -10,6 +10,7 @@ from app.logging_config import install_middlewares_and_handlers, setup_logging
 from app.routers import core as core_router
 from app.routers import relances as relances_router
 from app.routers import reports as reports_router
+from app.routers import slots as slots_router
 from app.routers import users as users_router
 from app.services.events import close_redis
 from app.services.health import perform_health_check_async
@@ -113,6 +114,7 @@ app.include_router(core_router.router, prefix="/api/v1")
 app.include_router(reports_router.router, prefix="/api/v1")
 app.include_router(relances_router.router, prefix="/api/v1")
 app.include_router(users_router.router, prefix="/api/v1")
+app.include_router(slots_router.router, prefix="/api/v1")
 
 # --- CORS ---
 app.add_middleware(
