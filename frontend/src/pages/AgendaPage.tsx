@@ -230,7 +230,13 @@ export function AgendaPage() {
                     </p>
                     <p className="text-[12px] text-fg-subtle">
                       {formatDateLong(action.deadline)}
-                      {action.resp_suivi ? ` · ${action.resp_suivi}` : ''}
+                      {/* Les porteurs de l'action, pas son responsable de suivi :
+                          c'est la même colonne « Responsables » que la liste des
+                          actions, sans quoi la même ligne affiche deux noms
+                          différents selon l'écran. */}
+                      {action.responsables.length > 0
+                        ? ` · ${action.responsables.map((responsable) => responsable.display_name).join(', ')}`
+                        : ''}
                     </p>
                   </article>
                 ))
