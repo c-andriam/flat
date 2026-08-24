@@ -121,6 +121,18 @@ export const IconChevronRight = (props: IconProps) => (
 )
 
 
+export const IconChevronUp = (props: IconProps) => (
+  <Svg {...props}>
+    <path d="M18 15l-6-6-6 6" />
+  </Svg>
+)
+
+export const IconChevronDown = (props: IconProps) => (
+  <Svg {...props}>
+    <path d="M6 9l6 6 6-6" />
+  </Svg>
+)
+
 export const IconSun = (props: IconProps) => (
   <Svg {...props}>
     <circle cx="12" cy="12" r="5" />

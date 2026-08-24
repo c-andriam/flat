@@ -274,3 +274,78 @@ def build_actions_query(
 def default_order(stmt: Select) -> Select:
     """Tri par urgence : échéance croissante, sans échéance en dernier."""
     return stmt.order_by(Action.deadline.nulls_last(), Action.numero)
+
+
+# ---------------------------------------------------------------------------
+# Tri demandé par l'appelant
+# ---------------------------------------------------------------------------
+
+class ActionSort(str, Enum):
+    """Colonnes sur lesquelles l'API accepte de trier.
+
+    Une énumération plutôt qu'un nom de colonne libre : le tri se termine dans
+    un `ORDER BY`, et la liste fermée est ce qui garantit qu'aucune chaîne
+    venue de la requête n'y arrive.
+    """
+
+    DEADLINE = "deadline"
+    PROJECT = "project"
+    NUMERO = "numero"
+    PROGRESS = "progress"
+    STATUS = "status"
+
+
+class SortOrder(str, Enum):
+    ASC = "asc"
+    DESC = "desc"
+
+
+def _project_code_expr():
+    """Code du projet porteur, en sous-requête corrélée.
+
+    Une jointure ferait le même travail, mais changerait le `FROM` d'une
+    requête que six routes construisent par ailleurs — dont une qui compte via
+    `COUNT(*) OVER ()`. La sous-requête laisse cette forme intacte.
+    """
+    return select(Project.code).where(Project.id == Action.project_id).scalar_subquery()
+
+
+_SORT_EXPRESSIONS = {
+    ActionSort.DEADLINE: lambda: Action.deadline,
+    ActionSort.PROJECT: _project_code_expr,
+    ActionSort.NUMERO: lambda: Action.numero,
+    ActionSort.PROGRESS: lambda: Action.progress,
+    ActionSort.STATUS: lambda: Action.status,
+}
+
+
+def apply_order(
+    stmt: Select,
+    sort: ActionSort | None = None,
+    order: SortOrder = SortOrder.ASC,
+) -> Select:
+    """Applique le tri demandé, ou le tri par urgence par défaut.
+
+    Un tri secondaire est toujours ajouté. Sans lui, deux actions de même
+    valeur — 64 actions en retard partagent le même projet, des dizaines le
+    même avancement — n'ont pas d'ordre défini : PostgreSQL est libre de les
+    renvoyer différemment d'une requête à l'autre, et une pagination par
+    `LIMIT/OFFSET` afficherait alors la même action sur deux pages, ou aucune.
+    """
+    if sort is None:
+        return default_order(stmt)
+
+    colonne = _SORT_EXPRESSIONS[sort]()
+    principal = colonne.desc() if order is SortOrder.DESC else colonne.asc()
+
+    # Les actions sans échéance restent en fin de liste dans les deux sens :
+    # « sans date » n'est ni la plus urgente ni la plus lointaine.
+    if sort is ActionSort.DEADLINE:
+        return stmt.order_by(principal.nulls_last(), Action.numero)
+
+    # Le numéro est déjà quasi unique ; seul le projet peut encore départager
+    # deux lignes homonymes, la contrainte d'unicité portant sur le couple.
+    if sort is ActionSort.NUMERO:
+        return stmt.order_by(principal, Action.project_id)
+
+    return stmt.order_by(principal, Action.deadline.nulls_last(), Action.numero)

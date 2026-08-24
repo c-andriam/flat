@@ -149,6 +149,24 @@ class Action(UUIDMixin, Base):
     project = relationship("Project", back_populates="actions")
     responsables = relationship("Responsable", secondary=action_responsables, back_populates="actions")  # D
 
+    @property
+    def project_code(self) -> str | None:
+        """Code du projet porteur, ou None si la relation n'est pas chargée.
+
+        Lu dans `__dict__` plutôt que par `self.project` : sur une session
+        asynchrone, l'accès à une relation non chargée déclencherait un
+        lazy-load hors contexte greenlet (MissingGreenlet). Les routes qui
+        exposent ce champ chargent la relation explicitement.
+        """
+        projet = self.__dict__.get("project")
+        return projet.code if projet is not None else None
+
+    @property
+    def project_name(self) -> str | None:
+        """Nom du projet porteur — mêmes précautions que `project_code`."""
+        projet = self.__dict__.get("project")
+        return projet.name if projet is not None else None
+
     def is_overdue(self, today: date | None = None) -> bool:
         """Échéance dépassée et action non terminée.
 

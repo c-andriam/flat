@@ -2,7 +2,15 @@ import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
 import { useActionSummary, useActions, useProjects } from '@/api/queries'
-import { ACTION_VIEWS, ACTION_VIEW_LABELS, type Action, type ActionView } from '@/api/types'
+import {
+  ACTION_VIEWS,
+  ACTION_VIEW_LABELS,
+  isActionSort,
+  type Action,
+  type ActionSort,
+  type ActionView,
+  type SortOrder,
+} from '@/api/types'
 import { useAuth } from '@/auth/useAuth'
 import { ActionStatusBadge } from '@/features/actions/ActionStatusBadge'
 import { DeadlineCell } from '@/features/actions/DeadlineCell'
@@ -40,12 +48,19 @@ export function ActionsPage() {
   const projectId = params.get('projet') ?? ''
   const debouncedSearch = useDebouncedValue(search, 300)
 
+  // Le tri vit dans l'URL, comme les filtres : un « regarde les retards de
+  // P01 » se transmet alors par simple copie du lien.
+  const sort: ActionSort | null = isActionSort(params.get('tri')) ? (params.get('tri') as ActionSort) : null
+  const sortOrder: SortOrder = params.get('sens') === 'desc' ? 'desc' : 'asc'
+
   const summaryQuery = useActionSummary()
   const projectsQuery = useProjects({ is_active: true, limit: 200 })
   const actionsQuery = useActions({
     view,
     search: debouncedSearch.trim() || null,
     project_id: projectId || null,
+    sort,
+    order: sortOrder,
     limit: PAGE_SIZE,
     offset,
   })
@@ -58,12 +73,52 @@ export function ActionsPage() {
     setOffset(0)
   }
 
+  /**
+   * Cycle d'un en-tête : croissant → décroissant → tri par défaut.
+   *
+   * Le retour au tri par urgence fait partie du cycle : sans lui, on ne peut
+   * plus revenir à l'ordre initial une fois une colonne cliquée.
+   */
+  const toggleSort = (key: string) => {
+    if (!isActionSort(key)) return
+    const next = new URLSearchParams(params)
+    if (sort !== key) {
+      next.set('tri', key)
+      next.delete('sens')
+    } else if (sortOrder === 'asc') {
+      next.set('tri', key)
+      next.set('sens', 'desc')
+    } else {
+      next.delete('tri')
+      next.delete('sens')
+    }
+    setParams(next, { replace: true })
+    // La page change de contenu : rester en page 6 afficherait un fragment
+    // arbitraire du nouveau classement.
+    setOffset(0)
+  }
+
   const columns: Column<Action>[] = [
     {
       key: 'numero',
       header: 'N°',
       render: (action) => <span className="whitespace-nowrap font-semibold text-fg">{action.numero}</span>,
       className: 'w-32',
+      sortKey: 'numero',
+    },
+    {
+      key: 'project',
+      header: 'Projet',
+      render: (action) => (
+        // Le nom complet en infobulle : la colonne doit rester étroite, mais
+        // « P23 » seul ne dit pas de quel chantier il s'agit.
+        <span className="whitespace-nowrap text-fg-muted" title={action.project_name ?? undefined}>
+          {action.project_code ?? '—'}
+        </span>
+      ),
+      className: 'w-20',
+      hideOnMobile: true,
+      sortKey: 'project',
     },
     {
       key: 'description',
@@ -96,18 +151,21 @@ export function ActionsPage() {
       render: (action) => <ProgressBar value={action.progress} className="min-w-[110px]" />,
       className: 'w-44',
       hideOnMobile: true,
+      sortKey: 'progress',
     },
     {
       key: 'deadline',
       header: 'Échéance',
       render: (action) => <DeadlineCell deadline={action.deadline} status={action.status} />,
       className: 'w-28',
+      sortKey: 'deadline',
     },
     {
       key: 'status',
       header: 'Statut',
       render: (action) => <ActionStatusBadge status={action.status} />,
       className: 'w-32',
+      sortKey: 'status',
     },
   ]
 
@@ -201,6 +259,9 @@ export function ActionsPage() {
             rows={actionsQuery.data?.items ?? []}
             rowKey={(action) => action.id}
             loading={actionsQuery.isLoading}
+            sort={sort}
+            sortOrder={sortOrder}
+            onSort={toggleSort}
             empty={
               <EmptyState
                 icon={<IconActivity size={44} strokeWidth={1.5} />}

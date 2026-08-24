@@ -109,6 +109,64 @@ def test_tri_par_echeance_croissante(api):
     assert echeances == sorted(echeances)
 
 
+def test_tri_par_projet_regroupe_les_actions(api):
+    """`sort=project` doit regrouper les actions d'un meme projet.
+
+    Sans tri, l'ordre est l'urgence : les 262 actions en retard du
+    portefeuille sont reparties sur 11 pages et celles d'un projet donne se
+    retrouvent eparpillees sur 4 pages, ce qui rend la vue inutilisable pour
+    « ou en est P01 ».
+    """
+    actions = api.get(
+        "/actions?view=overdue&sort=project&limit=200&active_projects_only=false"
+    ).json()
+    codes = [a["project_code"] for a in actions if a["project_code"]]
+    assert codes == sorted(codes), "les codes projet doivent sortir dans l'ordre"
+    # Regroupes, donc chaque code n'apparait que dans un seul bloc contigu.
+    blocs = [code for i, code in enumerate(codes) if i == 0 or codes[i - 1] != code]
+    assert len(blocs) == len(set(blocs))
+
+
+def test_tri_descendant_inverse_l_ordre(api):
+    croissant = api.get(
+        "/actions?view=overdue&sort=deadline&order=asc&limit=50&active_projects_only=false"
+    ).json()
+    decroissant = api.get(
+        "/actions?view=overdue&sort=deadline&order=desc&limit=50&active_projects_only=false"
+    ).json()
+    dates_asc = [a["deadline"] for a in croissant if a["deadline"]]
+    dates_desc = [a["deadline"] for a in decroissant if a["deadline"]]
+    assert dates_asc == sorted(dates_asc)
+    assert dates_desc == sorted(dates_desc, reverse=True)
+
+
+def test_tri_garde_les_pages_disjointes(api):
+    """Un tri sans depart de rang stable ferait reapparaitre la meme action
+    sur deux pages : des dizaines d'actions partagent le meme avancement."""
+    p1 = api.get("/actions?sort=progress&limit=5&offset=0&active_projects_only=false").json()
+    p2 = api.get("/actions?sort=progress&limit=5&offset=5&active_projects_only=false").json()
+    assert not ({a["id"] for a in p1} & {a["id"] for a in p2})
+
+
+def test_tri_inconnu_rejete(api):
+    assert api.get("/actions?sort=commentaire").status_code == 422
+    assert api.get("/actions?sort=deadline&order=aleatoire").status_code == 422
+
+
+def test_liste_expose_le_projet_porteur(api, test_project):
+    """La colonne « Projet » du tableau lit ces champs : sans eux, il faudrait
+    un appel par ligne pour afficher le code du projet."""
+    cree = api.post("/actions", json=_action(test_project["id"])).json()
+    ligne = next(
+        a for a in api.get(
+            f"/actions?project_id={test_project['id']}&limit=200&active_projects_only=false"
+        ).json()
+        if a["id"] == cree["id"]
+    )
+    assert ligne["project_code"] == test_project["code"]
+    assert ligne["project_name"] == test_project["name"]
+
+
 def test_limit_hors_bornes_rejete(api):
     assert api.get("/actions?limit=0").status_code == 422
     assert api.get("/actions?limit=99999").status_code == 422

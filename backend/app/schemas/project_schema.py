@@ -275,6 +275,15 @@ class ActionOut(ActionBase):
     numero: str
     phase: str | None = None
     project_id: uuid.UUID
+    # Repris du projet porteur pour qu'une liste d'actions soit lisible sans
+    # un second appel par projet. `None` quand la relation n'a pas été chargée
+    # par la route — jamais une erreur de sérialisation.
+    project_code: str | None = Field(
+        None, description="Code du projet porteur (ex. `P01`), si la route le fournit."
+    )
+    project_name: str | None = Field(
+        None, description="Nom du projet porteur, si la route le fournit."
+    )
     status: ActionStatus
     # Calculés par le serveur, jamais acceptés en écriture.
     spi: float = Field(..., description="Schedule Performance Index — suit l'avancement.")

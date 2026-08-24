@@ -34,10 +34,12 @@ from app.schemas.project_schema import (
 from app.schemas.report_schema import ActionSummaryOut
 from app.services.cache import get_or_set
 from app.services.action_queries import (
+    ActionSort,
     ActionView,
+    SortOrder,
+    apply_order,
     build_actions_query,
     count_all_views,
-    default_order,
 )
 from app.services.action_rules import (
     apply_indicators,
@@ -88,6 +90,24 @@ _PROJECT_PARAM = Query(
     description="Ne garder que les actions de ce projet (son identifiant UUID).",
 )
 
+_SORT_PARAM = Query(
+    None,
+    description=(
+        "Colonne de tri : `deadline`, `project`, `numero`, `progress` ou "
+        "`status`. Omis, les actions sortent par urgence — échéance croissante, "
+        "sans échéance en dernier. "
+        "Le tri porte sur l'ensemble du résultat, pas sur la page renvoyée : "
+        "sur 262 actions en retard réparties en 11 pages, `sort=project` est "
+        "le seul moyen de lire celles d'un projet donné sans les chercher page "
+        "par page."
+    ),
+)
+
+_ORDER_PARAM = Query(
+    SortOrder.ASC,
+    description="Sens du tri, `asc` (défaut) ou `desc`. Sans effet sans `sort`.",
+)
+
 _RESPONSABLE_PARAM = Query(
     None,
     description=(
@@ -121,7 +141,7 @@ async def _load_action(db: AsyncSession, action_id: uuid.UUID) -> Action | None:
     """
     result = await db.execute(
         select(Action)
-        .options(selectinload(Action.responsables))
+        .options(selectinload(Action.responsables), selectinload(Action.project))
         .filter(Action.id == action_id)
     )
     return result.scalars().first()
@@ -454,7 +474,14 @@ _WEEKS_AHEAD_PARAM = Query(
 
 
 async def _run_actions_query(
-    db: AsyncSession, response: Response, stmt, limit: int, offset: int, scope: Scope
+    db: AsyncSession,
+    response: Response,
+    stmt,
+    limit: int,
+    offset: int,
+    scope: Scope,
+    sort: ActionSort | None = None,
+    order: SortOrder = SortOrder.ASC,
 ):
     """Trie, pagine, compte et charge les responsables.
 
@@ -470,7 +497,11 @@ async def _run_actions_query(
     if condition is not None:
         stmt = stmt.where(condition)
 
-    stmt = default_order(stmt).options(selectinload(Action.responsables))
+    # Le projet est chargé avec les responsables : `ActionOut` expose son code
+    # et son nom, et une liste de 25 actions ne doit pas déclencher 25 requêtes.
+    stmt = apply_order(stmt, sort, order).options(
+        selectinload(Action.responsables), selectinload(Action.project)
+    )
     result = await db.execute(
         stmt.add_columns(func.count().over().label("total")).limit(limit).offset(offset)
     )
@@ -522,6 +553,8 @@ async def list_actions(
     search: str | None = Query(None, min_length=1, max_length=200, description="Recherche dans le numéro, la description et le commentaire."),
     active_projects_only: bool = Query(False, description="Ignorer les actions des projets archivés."),
     overdue_only: bool = Query(False, description="Raccourci historique équivalent à `view=overdue`."),
+    sort: ActionSort | None = _SORT_PARAM,
+    order: SortOrder = _ORDER_PARAM,
     due_soon_days: int = _DUE_SOON_PARAM,
     weeks_ahead: int = _WEEKS_AHEAD_PARAM,
     limit: int = _limit_param(),
@@ -545,7 +578,7 @@ async def list_actions(
         due_soon_days=due_soon_days,
         weeks_ahead=weeks_ahead,
     )
-    return await _run_actions_query(db, response, stmt, limit, offset, scope)
+    return await _run_actions_query(db, response, stmt, limit, offset, scope, sort, order)
 
 
 @router.get(
@@ -650,6 +683,8 @@ def _enregistrer_vue(chemin: str, vue: ActionView, resume: str, details: str) ->
             responsable_id: uuid.UUID | None = _RESPONSABLE_PARAM,
             active_projects_only: bool = _ACTIFS_PARAM,
             due_soon_days: int = _DUE_SOON_PARAM,
+            sort: ActionSort | None = _SORT_PARAM,
+            order: SortOrder = _ORDER_PARAM,
             limit: int = _limit_param(),
             offset: int = _OFFSET_PARAM,
             db: AsyncSession = Depends(get_async_db),
@@ -662,7 +697,9 @@ def _enregistrer_vue(chemin: str, vue: ActionView, resume: str, details: str) ->
                 active_projects_only=active_projects_only,
                 due_soon_days=due_soon_days,
             )
-            return await _run_actions_query(db, response, stmt, limit, offset, scope)
+            return await _run_actions_query(
+                db, response, stmt, limit, offset, scope, sort, order
+            )
 
     elif vue is ActionView.UPCOMING:
 
@@ -673,6 +710,8 @@ def _enregistrer_vue(chemin: str, vue: ActionView, resume: str, details: str) ->
             responsable_id: uuid.UUID | None = _RESPONSABLE_PARAM,
             active_projects_only: bool = _ACTIFS_PARAM,
             weeks_ahead: int = _WEEKS_AHEAD_PARAM,
+            sort: ActionSort | None = _SORT_PARAM,
+            order: SortOrder = _ORDER_PARAM,
             limit: int = _limit_param(),
             offset: int = _OFFSET_PARAM,
             db: AsyncSession = Depends(get_async_db),
@@ -685,7 +724,9 @@ def _enregistrer_vue(chemin: str, vue: ActionView, resume: str, details: str) ->
                 active_projects_only=active_projects_only,
                 weeks_ahead=weeks_ahead,
             )
-            return await _run_actions_query(db, response, stmt, limit, offset, scope)
+            return await _run_actions_query(
+                db, response, stmt, limit, offset, scope, sort, order
+            )
 
     else:
 
@@ -695,6 +736,8 @@ def _enregistrer_vue(chemin: str, vue: ActionView, resume: str, details: str) ->
             project_id: uuid.UUID | None = _PROJECT_PARAM,
             responsable_id: uuid.UUID | None = _RESPONSABLE_PARAM,
             active_projects_only: bool = _ACTIFS_PARAM,
+            sort: ActionSort | None = _SORT_PARAM,
+            order: SortOrder = _ORDER_PARAM,
             limit: int = _limit_param(),
             offset: int = _OFFSET_PARAM,
             db: AsyncSession = Depends(get_async_db),
@@ -706,7 +749,9 @@ def _enregistrer_vue(chemin: str, vue: ActionView, resume: str, details: str) ->
                 responsable_id=responsable_id,
                 active_projects_only=active_projects_only,
             )
-            return await _run_actions_query(db, response, stmt, limit, offset, scope)
+            return await _run_actions_query(
+                db, response, stmt, limit, offset, scope, sort, order
+            )
 
 
 _VUES_RACCOURCIES = [

@@ -10,6 +10,7 @@ import { request, requestPage, requestVoid, type QueryParams } from './client'
 import type {
   Action,
   ActionCreate,
+  ActionSort,
   ActionSummary,
   ActionUpdate,
   ActionView,
@@ -30,6 +31,7 @@ import type {
   Responsable,
   ResponsableCreate,
   ResponsableUpdate,
+  SortOrder,
   SyncLog,
   User,
   UserUpdate,
@@ -90,6 +92,9 @@ export interface ActionListParams {
   status?: ActionStatus | null
   search?: string | null
   active_projects_only?: boolean
+  /** Colonne de tri ; omise, l'API renvoie les actions par urgence. */
+  sort?: ActionSort | null
+  order?: SortOrder
   due_soon_days?: number
   weeks_ahead?: number
   limit?: number

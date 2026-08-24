@@ -37,6 +37,21 @@ export const ACTION_VIEWS = [
 ] as const
 export type ActionView = (typeof ACTION_VIEWS)[number]
 
+/**
+ * Colonnes sur lesquelles l'API accepte de trier.
+ *
+ * Le tri porte sur l'ensemble du résultat, pas sur la page affichée : sans
+ * lui, les actions d'un projet donné se retrouvent dispersées sur plusieurs
+ * pages, l'ordre par défaut étant l'urgence.
+ */
+export const ACTION_SORTS = ['deadline', 'project', 'numero', 'progress', 'status'] as const
+export type ActionSort = (typeof ACTION_SORTS)[number]
+export type SortOrder = 'asc' | 'desc'
+
+export function isActionSort(value: string | null): value is ActionSort {
+  return value !== null && (ACTION_SORTS as readonly string[]).includes(value)
+}
+
 export type SyncStatus = 'running' | 'success' | 'failed'
 export type UserRole = 'admin' | 'responsable_si' | 'lecteur' | 'dsio'
 export type ProjectHealth = 'ok' | 'attention' | 'critique'
@@ -97,6 +112,13 @@ export interface Action {
   numero: string
   phase: string | null
   project_id: Uuid
+  /**
+   * Code et nom du projet porteur, repris par les routes de liste pour éviter
+   * un appel par projet. `null` sur les routes qui ne chargent pas la
+   * relation — le détail d'un projet, où celui-ci est déjà connu.
+   */
+  project_code: string | null
+  project_name: string | null
   description: string
   resp_suivi: string | null
   status: ActionStatus
