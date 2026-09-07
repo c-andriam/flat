@@ -18,8 +18,16 @@ import {
 
 import { type ApiError } from './client'
 import {
+  patcherEntite,
+  patcherObjet,
+  retirerEntite,
+  type Rollback,
+} from './optimistic'
+import {
   actions as actionsApi,
+  gabarits as gabaritsApi,
   logs as logsApi,
+  referentiels as referentielsApi,
   projects as projectsApi,
   relances as relancesApi,
   reports as reportsApi,
@@ -36,6 +44,11 @@ import { queryKeys } from './queryKeys'
 import type {
   Action,
   ActionCreate,
+  ChampsGabarit,
+  Gabarit,
+  GabaritCreate,
+  GabaritEntite,
+  GabaritUpdate,
   ActionSummary,
   ActionUpdate,
   ForecastReport,
@@ -46,6 +59,10 @@ import type {
   ProjectReport,
   ProjectUpdate,
   ProjectWithActions,
+  Referentiel,
+  ReferentielCreate,
+  ReferentielListe,
+  ReferentielUpdate,
   RelanceBatch,
   RelanceConfig,
   RelanceDigestBatch,
@@ -77,7 +94,17 @@ import type {
 } from './types'
 
 type Query<T> = UseQueryResult<T, ApiError>
-type Mutation<TData, TVars> = UseMutationResult<TData, ApiError, TVars>
+/**
+ * `TContext` porte ce que `onMutate` a renvoyé — le rollback d'une mise à jour
+ * optimiste. Sans ce paramètre, il valait `unknown` et `onError` ne pouvait
+ * pas s'en servir pour restaurer l'état d'avant.
+ */
+type Mutation<TData, TVars, TContext = unknown> = UseMutationResult<
+  TData,
+  ApiError,
+  TVars,
+  TContext
+>
 
 // ─── Projets ───
 
@@ -107,12 +134,24 @@ export function useCreateProject(): Mutation<Project, ProjectCreate> {
   })
 }
 
-export function useUpdateProject(): Mutation<Project, { id: Uuid; payload: ProjectUpdate }> {
+export function useUpdateProject(): Mutation<
+  Project,
+  { id: Uuid; payload: ProjectUpdate },
+  Rollback
+> {
   const client = useQueryClient()
   return useMutation({
     mutationFn: ({ id, payload }: { id: Uuid; payload: ProjectUpdate }) =>
       projectsApi.update(id, payload),
-    onSuccess: () => {
+    onMutate: ({ id, payload }) =>
+      patcherEntite<Project>(
+        client,
+        queryKeys.projects.all,
+        id,
+        payload as Partial<Project>,
+      ),
+    onError: (_erreur, _variables, rollback) => rollback?.restaurer(),
+    onSettled: () => {
       void client.invalidateQueries({ queryKey: queryKeys.projects.all })
       void client.invalidateQueries({ queryKey: queryKeys.reports.all })
     },
@@ -170,12 +209,36 @@ export function useCreateAction(): Mutation<Action, ActionCreate> {
   })
 }
 
-export function useUpdateAction(): Mutation<Action, { id: Uuid; payload: ActionUpdate }> {
+/**
+ * Modifie une action, en affichant le changement avant la réponse du serveur.
+ *
+ * La bascule « en veille » et l'avancement se modifient d'un clic depuis une
+ * liste : attendre l'aller-retour (~250 ms vers Supabase) donne un bouton qui
+ * ne réagit pas, et un utilisateur qui reclique. Le cache est donc modifié
+ * tout de suite, puis restauré si le serveur refuse.
+ */
+export function useUpdateAction(): Mutation<
+  Action,
+  { id: Uuid; payload: ActionUpdate },
+  Rollback
+> {
   const client = useQueryClient()
   return useMutation({
     mutationFn: ({ id, payload }: { id: Uuid; payload: ActionUpdate }) =>
       actionsApi.update(id, payload),
-    onSuccess: () => {
+
+    onMutate: ({ id, payload }) =>
+      patcherEntite<Action>(client, queryKeys.actions.all, id, payload as Partial<Action>),
+
+    // Le serveur a refusé : on remet exactement ce qui était affiché avant.
+    // C'est le composant appelant qui annonce l'échec — lui seul sait quoi
+    // dire à l'utilisateur.
+    onError: (_erreur, _variables, rollback) => rollback?.restaurer(),
+
+    // `onSettled` et non `onSuccess` : après un échec aussi, il faut relire.
+    // Le serveur peut avoir appliqué une partie du changement, ou en avoir
+    // déduit d'autres — passer `progress` à 100 bascule le statut.
+    onSettled: () => {
       void client.invalidateQueries({ queryKey: queryKeys.actions.all })
       void client.invalidateQueries({ queryKey: queryKeys.reports.all })
     },
@@ -323,16 +386,32 @@ export function useMyRelancePreference(): Query<RelancePreference> {
 
 export function useUpdateMyRelancePreference(): Mutation<
   RelancePreference,
-  RelancePreferenceUpdate
+  RelancePreferenceUpdate,
+  Rollback
 > {
   const client = useQueryClient()
   return useMutation({
     mutationFn: (payload: RelancePreferenceUpdate) =>
       relancesApi.updateMyPreference(payload),
+
+    // Ce formulaire se règle case par case et jour par jour : chaque clic
+    // enregistre. Attendre la réponse rendait les cases molles, au point
+    // qu'on doutait d'avoir cliqué.
+    onMutate: (payload) =>
+      patcherObjet<RelancePreference>(
+        client,
+        queryKeys.relances.myPreference,
+        payload as Partial<RelancePreference>,
+      ),
+    onError: (_erreur, _variables, rollback) => rollback?.restaurer(),
+
     onSuccess: (preference) => {
-      // La réponse porte déjà les réglages effectifs : les réécrire évite un
-      // aller-retour et le clignotement du formulaire entre deux états.
+      // La réponse porte les réglages *effectifs* : la cadence en clair et la
+      // fréquence hebdomadaire sont recalculées par le serveur, la mise à
+      // jour optimiste ne pouvait pas les deviner.
       client.setQueryData(queryKeys.relances.myPreference, preference)
+    },
+    onSettled: () => {
       void client.invalidateQueries({ queryKey: queryKeys.relances.all })
     },
   })
@@ -352,13 +431,26 @@ export function useRelancePreferences(
 
 export function useUpdateRelancePreference(): Mutation<
   RelancePreference,
-  { responsableId: Uuid; payload: RelancePreferenceUpdate }
+  { responsableId: Uuid; payload: RelancePreferenceUpdate },
+  Rollback
 > {
   const client = useQueryClient()
   return useMutation({
     mutationFn: ({ responsableId, payload }) =>
       relancesApi.updatePreference(responsableId, payload),
-    onSuccess: () => {
+    // Le tableau de l'équipe est indexé par `responsable_id`, pas par `id` :
+    // une préférence n'a pas d'existence propre en dehors de la personne
+    // qu'elle concerne.
+    onMutate: ({ responsableId, payload }) =>
+      patcherEntite<RelancePreference>(
+        client,
+        queryKeys.relances.all,
+        responsableId,
+        payload as Partial<RelancePreference>,
+        'responsable_id',
+      ),
+    onError: (_erreur, _variables, rollback) => rollback?.restaurer(),
+    onSettled: () => {
       void client.invalidateQueries({ queryKey: queryKeys.relances.all })
     },
   })
@@ -393,6 +485,176 @@ export function useSendRelanceDigestBatch(): Mutation<RelanceDigestBatch, boolea
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: queryKeys.relances.all })
       void client.invalidateQueries({ queryKey: ['logs'] })
+    },
+  })
+}
+
+// ─── Paramétrage : référentiels ───
+
+/**
+ * Toutes les listes administrables en un appel.
+ *
+ * `staleTime` long : ce sont des listes de paramétrage, elles changent
+ * quelques fois par an. Les relire à chaque ouverture de formulaire aurait
+ * ajouté un aller-retour à chaque création.
+ */
+export function useReferentiels(inclureInactifs = false): Query<ReferentielListe[]> {
+  return useQuery({
+    queryKey: queryKeys.referentiels.list(inclureInactifs),
+    queryFn: ({ signal }) => referentielsApi.list(inclureInactifs, signal),
+    staleTime: 5 * 60_000,
+  })
+}
+
+export function useCreateReferentiel(): Mutation<Referentiel, ReferentielCreate> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: ReferentielCreate) => referentielsApi.create(payload),
+    // Pas de création optimiste : l'identifiant vient du serveur, et une
+    // ligne fantôme sans identifiant ne serait ni modifiable ni supprimable
+    // tant que la réponse n'est pas là.
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.referentiels.all })
+    },
+  })
+}
+
+export function useUpdateReferentiel(): Mutation<
+  Referentiel,
+  { id: Uuid; payload: ReferentielUpdate },
+  Rollback
+> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: Uuid; payload: ReferentielUpdate }) =>
+      referentielsApi.update(id, payload),
+    onMutate: ({ id, payload }) =>
+      patcherEntite<Referentiel>(
+        client,
+        queryKeys.referentiels.all,
+        id,
+        payload as Partial<Referentiel>,
+      ),
+    onError: (_erreur, _variables, rollback) => rollback?.restaurer(),
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.referentiels.all })
+      // Le libellé et la couleur sont affichés sur les projets et actions.
+      void client.invalidateQueries({ queryKey: queryKeys.projects.all })
+      void client.invalidateQueries({ queryKey: queryKeys.actions.all })
+    },
+  })
+}
+
+export function useDeleteReferentiel(): Mutation<void, Uuid, Rollback> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: Uuid) => referentielsApi.remove(id),
+    onMutate: (id) => retirerEntite(client, queryKeys.referentiels.all, id),
+    onError: (_erreur, _variables, rollback) => rollback?.restaurer(),
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.referentiels.all })
+    },
+  })
+}
+
+// ─── Paramétrage : gabarits ───
+
+export function useGabarits(
+  entite?: GabaritEntite,
+  inclureInactifs = false,
+): Query<Gabarit[]> {
+  const params = { entite: entite ?? null, inclure_inactifs: inclureInactifs }
+  return useQuery({
+    queryKey: queryKeys.gabarits.list(params),
+    queryFn: ({ signal }) => gabaritsApi.list(params, signal),
+    staleTime: 5 * 60_000,
+  })
+}
+
+/** Champs préremplissables, lus sur les schémas de création côté serveur. */
+export function useChampsGabarit(): Query<ChampsGabarit[]> {
+  return useQuery({
+    queryKey: queryKeys.gabarits.champs,
+    queryFn: ({ signal }) => gabaritsApi.champs(signal),
+    // Ils ne changent qu'avec une version de l'application.
+    staleTime: Infinity,
+  })
+}
+
+export function useCreateGabarit(): Mutation<Gabarit, GabaritCreate> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: GabaritCreate) => gabaritsApi.create(payload),
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.gabarits.all })
+    },
+  })
+}
+
+export function useUpdateGabarit(): Mutation<
+  Gabarit,
+  { id: Uuid; payload: GabaritUpdate },
+  Rollback
+> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: Uuid; payload: GabaritUpdate }) =>
+      gabaritsApi.update(id, payload),
+    onMutate: ({ id, payload }) =>
+      patcherEntite<Gabarit>(
+        client,
+        queryKeys.gabarits.all,
+        id,
+        payload as Partial<Gabarit>,
+      ),
+    onError: (_erreur, _variables, rollback) => rollback?.restaurer(),
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.gabarits.all })
+    },
+  })
+}
+
+export function useDeleteGabarit(): Mutation<void, Uuid, Rollback> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: Uuid) => gabaritsApi.remove(id),
+    onMutate: (id) => retirerEntite(client, queryKeys.gabarits.all, id),
+    onError: (_erreur, _variables, rollback) => rollback?.restaurer(),
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.gabarits.all })
+    },
+  })
+}
+
+/** Crée un projet depuis un gabarit, actions type comprises. */
+export function useCreateProjectFromGabarit(): Mutation<
+  ProjectWithActions,
+  { gabaritId: Uuid; payload: Partial<ProjectCreate> }
+> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ gabaritId, payload }) => gabaritsApi.creerProjet(gabaritId, payload),
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.projects.all })
+      // Le gabarit a créé des actions : les compteurs et les rapports
+      // changent aussi.
+      void client.invalidateQueries({ queryKey: queryKeys.actions.all })
+      void client.invalidateQueries({ queryKey: queryKeys.reports.all })
+    },
+  })
+}
+
+export function useCreateActionFromGabarit(): Mutation<
+  Action,
+  { gabaritId: Uuid; payload: Partial<ActionCreate> }
+> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ gabaritId, payload }) => gabaritsApi.creerAction(gabaritId, payload),
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.actions.all })
+      void client.invalidateQueries({ queryKey: queryKeys.projects.all })
+      void client.invalidateQueries({ queryKey: queryKeys.reports.all })
     },
   })
 }

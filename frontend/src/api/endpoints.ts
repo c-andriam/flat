@@ -14,7 +14,12 @@ import type {
   ActionSummary,
   ActionUpdate,
   ActionView,
+  ChampsGabarit,
   ForecastReport,
+  Gabarit,
+  GabaritCreate,
+  GabaritEntite,
+  GabaritUpdate,
   Page,
   PortfolioReport,
   Project,
@@ -22,6 +27,10 @@ import type {
   ProjectReport,
   ProjectUpdate,
   ProjectWithActions,
+  Referentiel,
+  ReferentielCreate,
+  ReferentielListe,
+  ReferentielUpdate,
   RelanceBatch,
   RelanceConfig,
   RelanceDigestBatch,
@@ -220,6 +229,66 @@ export const relances = {
     }),
 }
 
+// ─── Paramétrage : référentiels ───
+
+export const referentiels = {
+  /**
+   * Toutes les listes en un appel. Les formulaires en ont besoin de plusieurs
+   * à la fois, et quatre allers-retours sur une base distante coûtent plus
+   * que la réponse elle-même.
+   */
+  list: (inclureInactifs = false, signal?: AbortSignal) =>
+    request<ReferentielListe[]>('/referentiels', {
+      query: { inclure_inactifs: inclureInactifs },
+      signal,
+    }),
+
+  create: (payload: ReferentielCreate) =>
+    request<Referentiel>('/referentiels', { method: 'POST', body: payload }),
+
+  update: (id: Uuid, payload: ReferentielUpdate) =>
+    request<Referentiel>(`/referentiels/${id}`, { method: 'PUT', body: payload }),
+
+  remove: (id: Uuid) => requestVoid(`/referentiels/${id}`, { method: 'DELETE' }),
+}
+
+// ─── Paramétrage : gabarits ───
+
+export const gabarits = {
+  list: (
+    params: { entite?: GabaritEntite | null; inclure_inactifs?: boolean } = {},
+    signal?: AbortSignal,
+  ) => request<Gabarit[]>('/gabarits', { query: params as QueryParams, signal }),
+
+  /** Champs préremplissables, lus sur les schémas de création côté serveur. */
+  champs: (signal?: AbortSignal) =>
+    request<ChampsGabarit[]>('/gabarits/champs', { signal }),
+
+  create: (payload: GabaritCreate) =>
+    request<Gabarit>('/gabarits', { method: 'POST', body: payload }),
+
+  update: (id: Uuid, payload: GabaritUpdate) =>
+    request<Gabarit>(`/gabarits/${id}`, { method: 'PUT', body: payload }),
+
+  remove: (id: Uuid) => requestVoid(`/gabarits/${id}`, { method: 'DELETE' }),
+
+  /**
+   * Crée un projet depuis un gabarit. Tous les champs sont facultatifs : ce
+   * que le gabarit fournit n'a pas à être répété.
+   */
+  creerProjet: (gabaritId: Uuid, payload: Partial<ProjectCreate>) =>
+    request<ProjectWithActions>(`/projects/depuis-gabarit/${gabaritId}`, {
+      method: 'POST',
+      body: payload,
+    }),
+
+  creerAction: (gabaritId: Uuid, payload: Partial<ActionCreate>) =>
+    request<Action>(`/actions/depuis-gabarit/${gabaritId}`, {
+      method: 'POST',
+      body: payload,
+    }),
+}
+
 // ─── Journaux ───
 
 export const logs = {
@@ -299,6 +368,8 @@ export const dailyReports = {
 
 export const api = {
   auth,
+  referentiels,
+  gabarits,
   slots,
   dailyReports,
   projects,

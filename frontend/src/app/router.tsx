@@ -11,6 +11,7 @@ import { HomePage } from '@/pages/HomePage'
 import { LoginPage } from '@/pages/LoginPage'
 import { NotFoundPage } from '@/pages/NotFoundPage'
 import { ProjectDetailPage } from '@/pages/ProjectDetailPage'
+import { ParametragePage } from '@/pages/ParametragePage'
 import { ProjectsPage } from '@/pages/ProjectsPage'
 import { RapportsPage } from '@/pages/RapportsPage'
 import { RelancesPage } from '@/pages/RelancesPage'
@@ -44,6 +45,7 @@ export const router = createBrowserRouter([
           { path: '/agenda', element: <AgendaPage /> },
           { path: '/responsables', element: <ResponsablesPage /> },
           { path: '/relances', element: <RelancesPage /> },
+          { path: '/parametrage', element: <ParametragePage /> },
           { path: '/rapports', element: <RapportsPage /> },
           { path: '/creneaux', element: <SlotsPage /> },
           { path: '/rapport-du-jour', element: <DailyReportPage /> },

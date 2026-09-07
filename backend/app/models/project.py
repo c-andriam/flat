@@ -133,10 +133,18 @@ class Project(UUIDMixin, Base):
     is_standby = Column(Boolean, default=False, nullable=False, index=True)
     standby_reason = Column(Text, nullable=True)
 
+    # Nature du projet, prise dans le référentiel `type_projet`. `SET NULL` :
+    # désactiver ou supprimer une valeur de liste ne doit pas emporter les
+    # projets qui s'y rattachaient.
+    type_id = Column(
+        UUID(as_uuid=True), ForeignKey("referentiels.id", ondelete="SET NULL"), nullable=True
+    )
+
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     last_synced_at = Column(DateTime(timezone=True), nullable=True)
 
     actions = relationship("Action", back_populates="project", cascade="all, delete-orphan")
+    type = relationship("Referentiel", foreign_keys=[type_id], lazy="noload")
 
     def __repr__(self) -> str:
         return f"<Project id={self.id} code={self.code!r} name={self.name!r}>"
@@ -193,6 +201,13 @@ class Action(UUIDMixin, Base):
     is_standby = Column(Boolean, default=False, nullable=False, index=True)
     standby_reason = Column(Text, nullable=True)
 
+    # Nature de l'action, prise dans le référentiel `categorie_action`. Elle
+    # ne vient pas des classeurs Excel, qui n'ont pas cette colonne : c'est
+    # une information propre à l'outil, que l'import doit donc préserver.
+    categorie_id = Column(
+        UUID(as_uuid=True), ForeignKey("referentiels.id", ondelete="SET NULL"), nullable=True
+    )
+
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
@@ -203,6 +218,7 @@ class Action(UUIDMixin, Base):
     suiveurs = relationship(
         "Responsable", secondary=action_resp_suivi, back_populates="actions_suivies"
     )
+    categorie = relationship("Referentiel", foreign_keys=[categorie_id], lazy="noload")
 
     @property
     def project_code(self) -> str | None:

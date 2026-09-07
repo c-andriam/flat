@@ -14,6 +14,16 @@ from app.models.project import (  # noqa: F401
     action_resp_suivi,
     parse_jours,
 )
+from app.models.referentiel import (  # noqa: F401
+    REFERENTIEL_LABELS,
+    Referentiel,
+    ReferentielType,
+)
+from app.models.gabarit import (  # noqa: F401
+    Gabarit,
+    GabaritAction,
+    GabaritEntite,
+)
 from app.models.daily_report import (  # noqa: F401
     DailyReport,
     DailyReportItem,

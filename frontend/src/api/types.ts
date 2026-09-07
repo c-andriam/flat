@@ -142,6 +142,8 @@ export interface Action {
   /** En veille : l'action reste au tableau de bord mais sort des relances. */
   is_standby: boolean
   standby_reason: string | null
+  /** Catégorie, prise dans le référentiel `categorie_action`. */
+  categorie_id: Uuid | null
   created_at: IsoDateTime
   updated_at: IsoDateTime
 }
@@ -157,6 +159,7 @@ export interface ActionCreate {
   date_realisation?: IsoDate | null
   charges_hj?: number | null
   commentaire?: string | null
+  categorie_id?: Uuid | null
 }
 
 export interface ActionUpdate {
@@ -172,6 +175,7 @@ export interface ActionUpdate {
   responsable_names?: string[]
   is_standby?: boolean
   standby_reason?: string | null
+  categorie_id?: Uuid | null
 }
 
 // ─── Projets ───
@@ -190,6 +194,8 @@ export interface Project {
    */
   is_standby: boolean
   standby_reason: string | null
+  /** Nature du projet, prise dans le référentiel `type_projet`. */
+  type_id: Uuid | null
   created_at: IsoDateTime
   last_synced_at: IsoDateTime | null
 }
@@ -203,6 +209,7 @@ export interface ProjectCreate {
   name: string
   source_file_path: string
   has_phases?: boolean
+  type_id?: Uuid | null
 }
 
 export interface ProjectUpdate {
@@ -212,6 +219,7 @@ export interface ProjectUpdate {
   has_phases?: boolean
   is_standby?: boolean
   standby_reason?: string | null
+  type_id?: Uuid | null
 }
 
 // ─── Journaux ───
@@ -487,6 +495,168 @@ export interface RelanceDigestBatch {
   failed: number
   skipped: number
   results: RelanceDigestSendResult[]
+}
+
+// ─── Paramétrage : référentiels et gabarits ───
+
+/**
+ * Listes administrables reconnues par l'application.
+ *
+ * Fermée volontairement : ajouter une *valeur* est un acte d'administration,
+ * ajouter un *type* est un développement, puisqu'il faut du code pour le
+ * consommer. Des types libres produiraient des listes que rien ne lit.
+ */
+export type ReferentielType =
+  | 'type_projet'
+  | 'categorie_action'
+  | 'salle'
+  | 'type_reunion'
+
+export interface Referentiel {
+  id: Uuid
+  type: ReferentielType
+  /** Identifiant stable, insensible au renommage du libellé. */
+  code: string
+  label: string
+  description: string | null
+  /** Couleur du badge en hexadécimal, ou `null` pour la teinte neutre. */
+  color: string | null
+  position: number
+  is_active: boolean
+  parent_id: Uuid | null
+  /** Propriétés propres à la valeur — `{ capacite: 12 }` pour une salle. */
+  attributs: Record<string, unknown> | null
+  created_at: IsoDateTime
+  updated_at: IsoDateTime
+}
+
+/** Une liste administrable et ses valeurs. */
+export interface ReferentielListe {
+  type: ReferentielType
+  label: string
+  values: Referentiel[]
+}
+
+export interface ReferentielCreate {
+  type: ReferentielType
+  code: string
+  label: string
+  description?: string | null
+  color?: string | null
+  position?: number
+  parent_id?: Uuid | null
+  attributs?: Record<string, unknown> | null
+}
+
+/** Ni `type` ni `code` : les déplacer romprait les rattachements existants. */
+export interface ReferentielUpdate {
+  label?: string
+  description?: string | null
+  color?: string | null
+  position?: number
+  parent_id?: Uuid | null
+  attributs?: Record<string, unknown> | null
+  is_active?: boolean
+}
+
+export type GabaritEntite = 'projet' | 'action'
+
+export const GABARIT_ENTITE_LABELS: Record<GabaritEntite, string> = {
+  projet: 'Projet',
+  action: 'Action',
+}
+
+/** Contraintes de saisie applicables à un champ. */
+export interface RegleChamp {
+  obligatoire?: boolean
+  masque?: boolean
+  verrouille?: boolean
+}
+
+export interface GabaritActionModele {
+  id?: Uuid
+  description: string
+  position: number
+  phase?: string | null
+  resp_suivi?: string | null
+  responsable_names: string[]
+  /** Échéance en jours depuis la création : une date absolue serait périmée. */
+  delai_jours?: number | null
+  charges_hj?: number | null
+  categorie_id?: Uuid | null
+}
+
+export interface Gabarit {
+  id: Uuid
+  entite: GabaritEntite
+  nom: string
+  description: string | null
+  /** Valeurs préremplies, par nom de champ du schéma de création. */
+  valeurs: Record<string, unknown>
+  /** Contraintes de saisie, par champ. */
+  politique: Record<string, RegleChamp>
+  is_active: boolean
+  is_default: boolean
+  position: number
+  actions: GabaritActionModele[]
+  created_at: IsoDateTime
+  updated_at: IsoDateTime
+}
+
+export interface GabaritCreate {
+  entite: GabaritEntite
+  nom: string
+  description?: string | null
+  valeurs?: Record<string, unknown>
+  politique?: Record<string, RegleChamp>
+  is_active?: boolean
+  is_default?: boolean
+  position?: number
+  actions?: GabaritActionModele[]
+}
+
+/** `entite` est absent : en changer rendrait valeurs et politique invalides. */
+export interface GabaritUpdate {
+  nom?: string
+  description?: string | null
+  valeurs?: Record<string, unknown>
+  politique?: Record<string, RegleChamp>
+  is_active?: boolean
+  is_default?: boolean
+  position?: number
+  actions?: GabaritActionModele[]
+}
+
+/**
+ * Nature d'un champ, telle que l'interface doit la présenter.
+ *
+ * Déduite côté serveur des annotations du schéma de création : une table de
+ * correspondance tenue ici se serait désynchronisée au premier champ ajouté,
+ * et l'écran d'administration aurait proposé le mauvais contrôle.
+ */
+export type TypeChamp =
+  | 'texte'
+  | 'texte_long'
+  | 'nombre'
+  | 'booleen'
+  | 'date'
+  | 'liste_texte'
+  | 'referentiel'
+  | 'projet'
+
+export interface ChampGabarit {
+  nom: string
+  type: TypeChamp
+  description: string | null
+  /** Liste dans laquelle puiser, quand le champ désigne un référentiel. */
+  referentiel: ReferentielType | null
+}
+
+/** Champs qu'un gabarit peut préremplir, lus sur le schéma de création. */
+export interface ChampsGabarit {
+  entite: GabaritEntite
+  champs: ChampGabarit[]
+  cles_politique: string[]
 }
 
 // ─── Utilisateurs ───

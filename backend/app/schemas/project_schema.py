@@ -144,6 +144,14 @@ class ActionBase(BaseModel):
     date_realisation: date | None = Field(None, description="Date réelle de complétion.")
     charges_hj: float | None = Field(None, description="Charges estimées en Homme/Jour.")
     commentaire: str | None = Field(None, description="Commentaire libre.")
+    categorie_id: uuid.UUID | None = Field(
+        None,
+        description=(
+            "Catégorie de l'action, prise dans le référentiel "
+            "`categorie_action`. Absente des classeurs Excel : c'est une "
+            "information propre à l'outil, que l'import préserve."
+        ),
+    )
 
 
 class ActionCreate(ActionBase, RefuseChampsCalcules):
@@ -242,6 +250,9 @@ class ActionUpdate(PartialUpdate):
     standby_reason: str | None = Field(
         None, max_length=2000,
         description="Motif de la mise en veille — « en attente du prestataire ».",
+    )
+    categorie_id: uuid.UUID | None = Field(
+        None, description="Changer la catégorie (référentiel `categorie_action`)."
     )
     responsable_names: list[str] | None = Field(
         None,
@@ -346,6 +357,14 @@ class ProjectBase(BaseModel):
     has_phases: bool = Field(
         False, description="Si vrai, les actions nécessitent le champ `phase` (ex: P01-02-05)."
     )
+    type_id: uuid.UUID | None = Field(
+        None,
+        description=(
+            "Nature du projet, prise dans le référentiel `type_projet` "
+            "(`GET /referentiels`). Les valeurs sont administrables, aucune "
+            "n'est codée en dur."
+        ),
+    )
 
     @field_validator("code")
     @classmethod
@@ -375,6 +394,9 @@ class ProjectUpdate(PartialUpdate):
             "Activer/désactiver la gestion par phases. Refusé (409) si le "
             "projet porte déjà des actions."
         ),
+    )
+    type_id: uuid.UUID | None = Field(
+        None, description="Changer la nature du projet (référentiel `type_projet`)."
     )
     is_standby: bool | None = Field(
         None,

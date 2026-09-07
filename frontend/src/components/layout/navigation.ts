@@ -41,4 +41,10 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
     icon: IconClipboard,
     keywords: ['fin de journée', 'compte rendu', 'tâches', 'daily'],
   },
+  {
+    to: '/parametrage',
+    label: 'Paramétrage',
+    icon: IconParametres,
+    keywords: ['réglages', 'listes', 'gabarits', 'modèles', 'catégories', 'salles'],
+  },
 ] as const

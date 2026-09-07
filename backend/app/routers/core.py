@@ -2,6 +2,8 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
+from fastapi.encoders import jsonable_encoder
+from pydantic import ValidationError
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +19,7 @@ from app.models.project import (
     Responsable,
     SyncLog,
 )
+from app.models.gabarit import Gabarit, GabaritEntite
 from app.models.user import User
 from app.schemas.project_schema import (
     ActionCreate,
@@ -32,6 +35,7 @@ from app.schemas.project_schema import (
     ResponsableUpdate,
     SyncLogOut,
 )
+from app.schemas.parametrage_schema import ActionDepuisGabarit, ProjetDepuisGabarit
 from app.schemas.report_schema import ActionSummaryOut
 from app.services.cache import get_or_set
 from app.services.action_queries import (
@@ -50,6 +54,7 @@ from app.services.action_rules import (
     today_utc,
 )
 from app.services.events import publish_event
+from app.services import gabarits as service_gabarits
 from app.services.names import (
     dedupe,
     normalize_key,
@@ -421,6 +426,200 @@ async def create_project(payload: ProjectCreate, db: AsyncSession = Depends(get_
         {"id": project.id, "code": project.code, "name": project.name},
     )
     return project
+
+
+async def _gabarit_actif(
+    db: AsyncSession, gabarit_id: uuid.UUID, entite: GabaritEntite
+) -> Gabarit:
+    """Charge un gabarit utilisable, ou explique pourquoi il ne l'est pas."""
+    gabarit = (
+        await db.execute(
+            select(Gabarit)
+            .options(selectinload(Gabarit.actions))
+            .filter(Gabarit.id == gabarit_id)
+        )
+    ).scalars().first()
+    if gabarit is None:
+        raise HTTPException(status_code=404, detail="Gabarit introuvable")
+    if gabarit.entite is not entite:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Le gabarit « {gabarit.nom} » crée des {gabarit.entite.value}s, "
+                f"pas des {entite.value}s."
+            ),
+        )
+    if not gabarit.is_active:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Le gabarit « {gabarit.nom} » est désactivé. Le réactiver "
+                "depuis le paramétrage, ou en choisir un autre."
+            ),
+        )
+    return gabarit
+
+
+def _fusionner(gabarit: Gabarit, fournis: dict, schema):
+    """Applique le gabarit puis valide le résultat par le schéma de création.
+
+    L'ordre compte : un gabarit peut fournir des champs que la création exige,
+    donc la validation stricte ne peut intervenir qu'après la fusion. Valider
+    d'abord aurait rendu inutilisable tout gabarit fournissant une valeur
+    obligatoire — c'est-à-dire précisément ceux qui servent à quelque chose.
+    """
+    try:
+        fusion = service_gabarits.appliquer(gabarit, fournis)
+    except service_gabarits.GabaritError as erreur:
+        raise HTTPException(status_code=422, detail=str(erreur))
+    try:
+        return schema(**fusion)
+    except ValidationError as erreur:
+        # Les erreurs sont renvoyées telles que FastAPI les produit d'habitude :
+        # l'appelant n'a pas à distinguer une saisie invalide selon qu'elle est
+        # passée ou non par un gabarit.
+        raise HTTPException(status_code=422, detail=jsonable_encoder(erreur.errors()))
+
+
+@router.post(
+    "/projects/depuis-gabarit/{gabarit_id}",
+    response_model=ProjectWithActionsOut,
+    status_code=201,
+    dependencies=[require_writer],
+    tags=["projects"],
+    summary="Créer un projet à partir d'un gabarit",
+    description=(
+        "Complète la saisie avec les valeurs du gabarit, vérifie sa politique "
+        "de champs, crée le projet, puis instancie ses actions type — celles "
+        "que tout projet de ce genre comporte, avec leurs échéances calculées "
+        "à partir d'aujourd'hui.\n\n"
+        "Tous les champs de la saisie sont facultatifs ici : ce que le gabarit "
+        "fournit n'a pas à être répété. Le résultat fusionné est ensuite "
+        "soumis aux mêmes règles que `POST /projects`, un champ manquant "
+        "produit donc la même erreur.\n\n"
+        "Le projet est renvoyé avec ses actions."
+    ),
+    response_description="Le projet créé et ses actions.",
+    responses={
+        **AUTH_RESPONSES,
+        404: {"description": "Gabarit introuvable."},
+        409: {"description": "Un projet avec ce code existe déjà."},
+        422: {"description": "Saisie incomplète, ou contraire à la politique du gabarit."},
+    },
+)
+async def create_project_from_gabarit(
+    payload: ProjetDepuisGabarit,
+    gabarit_id: uuid.UUID = Path(..., description="Identifiant du gabarit de projet."),
+    db: AsyncSession = Depends(get_async_db),
+):
+    gabarit = await _gabarit_actif(db, gabarit_id, GabaritEntite.PROJET)
+    creation = _fusionner(gabarit, payload.model_dump(exclude_unset=True), ProjectCreate)
+
+    project = Project(**creation.model_dump())
+    db.add(project)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409, detail=f"Le projet '{creation.code}' existe déjà"
+        )
+    await db.refresh(project)
+
+    # Les actions type sont créées après le projet, une par une, par le même
+    # chemin que la création manuelle : la génération du numéro suppose que le
+    # projet existe et lit les numéros déjà attribués.
+    #
+    # Si l'une d'elles échoue, le projet est supprimé — ses actions suivent par
+    # cascade. Un gabarit incomplet laisserait sinon un projet à moitié peuplé,
+    # que l'utilisateur devrait démêler à la main sans savoir ce qui manque.
+    # Le cas est rare : les contraintes sont vérifiées à l'enregistrement du
+    # gabarit. Il reste la phase, qui dépend du projet créé.
+    try:
+        for modele in service_gabarits.payloads_actions(gabarit):
+            await _creer_action(
+                db, project, ActionCreate(project_id=project.id, **modele)
+            )
+    except (ValidationError, HTTPException) as erreur:
+        await db.delete(project)
+        await db.commit()
+        detail = (
+            jsonable_encoder(erreur.errors())
+            if isinstance(erreur, ValidationError)
+            else erreur.detail
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": (
+                    f"Le gabarit « {gabarit.nom} » contient une action type "
+                    "que ce projet ne permet pas de créer. Aucun projet n'a "
+                    "été créé."
+                ),
+                "cause": detail,
+            },
+        )
+
+    await publish_event(
+        "project_created",
+        {"id": project.id, "code": project.code, "name": project.name},
+    )
+    result = await db.execute(
+        select(Project)
+        .options(
+            selectinload(Project.actions).selectinload(Action.responsables),
+            selectinload(Project.actions).selectinload(Action.suiveurs),
+        )
+        .filter(Project.id == project.id)
+    )
+    return result.scalars().first()
+
+
+@router.post(
+    "/actions/depuis-gabarit/{gabarit_id}",
+    response_model=ActionOut,
+    status_code=201,
+    dependencies=[require_writer],
+    tags=["actions"],
+    summary="Créer une action à partir d'un gabarit",
+    description=(
+        "Même principe que pour un projet : la saisie est complétée par le "
+        "gabarit, sa politique est vérifiée, puis le résultat passe par les "
+        "règles de `POST /actions`.\n\n"
+        "Un gabarit d'action exprime son échéance en `delai_jours`, convertie "
+        "en date à cet instant : une date absolue dans un gabarit serait "
+        "périmée dès son deuxième usage."
+    ),
+    response_description="L'action créée.",
+    responses={
+        **AUTH_RESPONSES,
+        404: {"description": "Gabarit ou projet introuvable."},
+        422: {"description": "Saisie incomplète, ou contraire à la politique du gabarit."},
+    },
+)
+async def create_action_from_gabarit(
+    payload: ActionDepuisGabarit,
+    gabarit_id: uuid.UUID = Path(..., description="Identifiant du gabarit d'action."),
+    db: AsyncSession = Depends(get_async_db),
+):
+    gabarit = await _gabarit_actif(db, gabarit_id, GabaritEntite.ACTION)
+    creation = _fusionner(gabarit, payload.model_dump(exclude_unset=True), ActionCreate)
+
+    result = await db.execute(select(Project).filter(Project.id == creation.project_id))
+    project = result.scalars().first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Projet introuvable")
+
+    action = await _creer_action(db, project, creation)
+    await publish_event(
+        "action_created",
+        {
+            "id": action.id,
+            "numero": action.numero,
+            "project_id": action.project_id,
+        },
+    )
+    return action
 
 
 @router.put(
@@ -929,6 +1128,32 @@ async def create_action(payload: ActionCreate, db: AsyncSession = Depends(get_as
     if not project:
         raise HTTPException(status_code=404, detail="Projet introuvable")
 
+    action = await _creer_action(db, project, payload)
+    await publish_event(
+        "action_created",
+        {
+            "id": action.id,
+            "numero": action.numero,
+            "project_id": action.project_id,
+        },
+    )
+    return action
+
+
+async def _creer_action(
+    db: AsyncSession, project: Project, payload: ActionCreate
+) -> Action:
+    """Crée une action et la renvoie rechargée, sans publier d'événement.
+
+    Extrait de `create_action` pour que la création depuis un gabarit emprunte
+    exactement le même chemin — génération du numéro, rapprochement des
+    responsables, calcul des indicateurs. Une seconde implémentation aurait
+    fini par produire des actions subtilement différentes selon leur origine.
+
+    L'événement temps réel reste à l'appelant : instancier un gabarit crée
+    plusieurs actions, et publier un message par action inonderait le tableau
+    de bord là où un seul « projet créé » suffit.
+    """
     phase = _valider_phase(project, payload.phase)
     data = payload.model_dump(exclude={"responsable_names", "phase"})
 
@@ -968,16 +1193,7 @@ async def create_action(payload: ActionCreate, db: AsyncSession = Depends(get_as
                 )
             continue
 
-        created = await _load_action(db, action.id)
-        await publish_event(
-            "action_created",
-            {
-                "id": created.id,
-                "numero": created.numero,
-                "project_id": created.project_id,
-            },
-        )
-        return created
+        return await _load_action(db, action.id)
 
 
 @router.put(

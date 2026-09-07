@@ -9,6 +9,7 @@ from app.database import async_engine, get_async_db
 from app.logging_config import install_middlewares_and_handlers, setup_logging
 from app.routers import core as core_router
 from app.routers import daily_reports as daily_reports_router
+from app.routers import parametrage as parametrage_router
 from app.routers import relances as relances_router
 from app.routers import reports as reports_router
 from app.routers import slots as slots_router
@@ -117,6 +118,7 @@ app.include_router(relances_router.router, prefix="/api/v1")
 app.include_router(users_router.router, prefix="/api/v1")
 app.include_router(slots_router.router, prefix="/api/v1")
 app.include_router(daily_reports_router.router, prefix="/api/v1")
+app.include_router(parametrage_router.router, prefix="/api/v1")
 
 # --- CORS ---
 app.add_middleware(

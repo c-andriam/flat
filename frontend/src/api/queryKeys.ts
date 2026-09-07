@@ -60,6 +60,17 @@ export const queryKeys = {
     history: (params: object) => ['daily-reports', 'history', params] as const,
   },
 
+  referentiels: {
+    all: ['referentiels'] as const,
+    list: (inclureInactifs: boolean) => ['referentiels', inclureInactifs] as const,
+  },
+
+  gabarits: {
+    all: ['gabarits'] as const,
+    list: (params: object) => ['gabarits', 'list', params] as const,
+    champs: ['gabarits', 'champs'] as const,
+  },
+
   logs: {
     sync: (limit: number) => ['logs', 'sync', limit] as const,
     relances: (limit: number) => ['logs', 'relances', limit] as const,
