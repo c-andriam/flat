@@ -9,6 +9,7 @@ import {
   IconClipboard,
   IconMail,
   IconPieChart,
+  IconSliders,
   IconUsers,
   type IconProps,
 } from '@/ui/Icon'
@@ -44,7 +45,7 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
   {
     to: '/parametrage',
     label: 'Paramétrage',
-    icon: IconParametres,
+    icon: IconSliders,
     keywords: ['réglages', 'listes', 'gabarits', 'modèles', 'catégories', 'salles'],
   },
 ] as const
