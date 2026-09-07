@@ -8,10 +8,21 @@ vues métier (`services/action_queries`), les mêmes gabarits
 (`services/email_templates`) et le même émetteur (`services/outlook`) que les
 routes `/relances` : un rappel quotidien et un aperçu déclenché à la main
 produisent exactement le même message.
+
+Deux tâches d'envoi coexistent :
+
+  - `send_scheduled_digests` est le moteur courant. Elle tourne toutes les
+    heures et envoie à chacun, aux jours et à l'heure qu'il a choisis, un
+    récapitulatif unique découpé en sections.
+  - `check_and_send` produit un rappel d'une seule nature, sur l'ensemble des
+    responsables. Elle n'est plus planifiée — le récapitulatif la couvre — mais
+    reste appelable pour un envoi exceptionnel, par exemple la veille d'un
+    comité de pilotage.
 """
 
 import logging
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
@@ -19,7 +30,7 @@ from sqlalchemy.orm import selectinload
 from app.config import settings
 from app.database import SessionLocal
 from app.models.project import Action, ActionStatus, RelanceLog, Responsable
-from app.services import outlook
+from app.services import outlook, relance_service
 from app.services.action_queries import ActionView, build_actions_query, default_order
 from app.services.digests import to_digest
 from app.services.email_templates import RelanceKind, build_email
@@ -154,6 +165,97 @@ def check_and_send(self, kind: str = RelanceKind.OVERDUE.value):
     except Exception as exc:
         db.rollback()
         logger.exception("Erreur lors de l'envoi des relances %s", kind)
+        raise self.retry(exc=exc, countdown=300)
+    finally:
+        db.close()
+
+
+@app.task(
+    name="app.workers.notifications.send_scheduled_digests", bind=True, max_retries=2
+)
+def send_scheduled_digests(self, force: bool = False):
+    """Récapitulatifs planifiés — la tâche exécutée à chaque heure ronde.
+
+    Elle remplace les trois rappels à heure fixe. Ceux-ci imposaient la même
+    cadence à tout le monde et envoyaient jusqu'à trois messages par jour à
+    une même personne ; la période de silence les rendait de surcroît
+    mutuellement exclusifs, si bien qu'un responsable concerné par les trois
+    n'en recevait qu'un, choisi par l'ordre du planificateur.
+
+    Chacun fixe désormais ses jours et son heure. La tâche tourne donc toutes
+    les heures et ne retient, à chaque passage, que les personnes dont le
+    créneau est celui-ci.
+
+    Args:
+        force: ignorer le créneau et l'envoi du jour — pour déclencher une
+            campagne immédiate depuis l'API sans attendre l'heure choisie.
+    """
+    # L'heure choisie par un utilisateur s'entend dans son fuseau, pas en UTC.
+    maintenant = datetime.now(ZoneInfo(settings.relance_timezone))
+
+    db = SessionLocal()
+    envoyes = simules = echecs = ignores = hors_creneau = 0
+    try:
+        # L'heure filtre en SQL, le jour de la semaine en Python : `days_of_week`
+        # est une liste dans une colonne texte, et la découper en SQL coûterait
+        # plus que de la relire sur les quelques personnes déjà retenues par
+        # l'heure.
+        candidats = relance_service.candidats_sync(
+            db, None if force else maintenant.hour
+        )
+        for responsable, reglage in candidats:
+            if not force and not reglage.doit_envoyer(maintenant):
+                hors_creneau += 1
+                continue
+            # Le worker peut redémarrer, et `task_acks_late` fait redistribuer
+            # une tâche interrompue : sans ce contrôle, la même personne
+            # recevrait deux fois le même récapitulatif.
+            if not force and relance_service.deja_envoye_sync(db, responsable.id):
+                ignores += 1
+                continue
+
+            sections = relance_service.sections_sync(db, reglage, responsable.id)
+            motif = relance_service.motif_de_blocage(responsable, reglage, sections)
+            if motif is not None:
+                # « Aucune action » est le cas nominal d'une personne à jour :
+                # il ne mérite ni un avertissement ni une ligne d'échec.
+                ignores += 1
+                continue
+
+            message = relance_service.construire_message(responsable, reglage, sections)
+            resultat = relance_service.envoyer_sync(db, responsable, message, sections)
+
+            if not resultat.ok:
+                echecs += 1
+                logger.error(
+                    "Récapitulatif non envoyé à %s : %s",
+                    responsable.email, resultat.detail,
+                )
+            elif resultat.status is outlook.SendStatus.SENT:
+                envoyes += 1
+            else:
+                simules += 1
+
+        logger.info(
+            "Récapitulatifs %s — %d envoyés, %d simulés, %d en échec, %d sans "
+            "envoi, %d hors créneau (mode : %s)",
+            maintenant.strftime("%d/%m %Hh"),
+            envoyes, simules, echecs, ignores, hors_creneau,
+            outlook.send_mode().value,
+        )
+        return {
+            "status": "success",
+            "mode": outlook.send_mode().value,
+            "sent": envoyes,
+            "simulated": simules,
+            "failed": echecs,
+            "skipped": ignores,
+            "out_of_slot": hors_creneau,
+        }
+
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Erreur lors de l'envoi des récapitulatifs planifiés")
         raise self.retry(exc=exc, countdown=300)
     finally:
         db.close()

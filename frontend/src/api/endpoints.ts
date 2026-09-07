@@ -24,8 +24,13 @@ import type {
   ProjectWithActions,
   RelanceBatch,
   RelanceConfig,
+  RelanceDigestBatch,
+  RelanceDigestPreview,
+  RelanceDigestSendResult,
   RelanceKind,
   RelanceLog,
+  RelancePreference,
+  RelancePreferenceUpdate,
   RelancePreview,
   RelanceSendResult,
   Responsable,
@@ -177,6 +182,42 @@ export const relances = {
 
   sendBatch: (kind: RelanceKind) =>
     request<RelanceBatch>('/relances/send', { method: 'POST', query: { kind } }),
+
+  // ─── Récapitulatif planifié ───
+
+  /** Réglages du compte connecté. Accessible même en lecture seule. */
+  myPreference: (signal?: AbortSignal) =>
+    request<RelancePreference>('/relances/preferences/me', { signal }),
+
+  updateMyPreference: (payload: RelancePreferenceUpdate) =>
+    request<RelancePreference>('/relances/preferences/me', {
+      method: 'PUT',
+      body: payload,
+    }),
+
+  /** Réglages de toute l'équipe — réservé aux administrateurs. */
+  preferences: (tous = false, signal?: AbortSignal) =>
+    request<RelancePreference[]>('/relances/preferences', { query: { tous }, signal }),
+
+  updatePreference: (responsableId: Uuid, payload: RelancePreferenceUpdate) =>
+    request<RelancePreference>(`/relances/preferences/${responsableId}`, {
+      method: 'PUT',
+      body: payload,
+    }),
+
+  digest: (responsableId: Uuid, signal?: AbortSignal) =>
+    request<RelanceDigestPreview>(`/relances/${responsableId}/digest`, { signal }),
+
+  sendDigest: (responsableId: Uuid) =>
+    request<RelanceDigestSendResult>(`/relances/${responsableId}/digest/send`, {
+      method: 'POST',
+    }),
+
+  sendDigestBatch: (dryRun = false) =>
+    request<RelanceDigestBatch>('/relances/digests/send', {
+      method: 'POST',
+      query: { dry_run: dryRun },
+    }),
 }
 
 // ─── Journaux ───

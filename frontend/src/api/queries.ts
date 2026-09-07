@@ -48,8 +48,13 @@ import type {
   ProjectWithActions,
   RelanceBatch,
   RelanceConfig,
+  RelanceDigestBatch,
+  RelanceDigestPreview,
+  RelanceDigestSendResult,
   RelanceKind,
   RelanceLog,
+  RelancePreference,
+  RelancePreferenceUpdate,
   Responsable,
   ResponsableCreate,
   ResponsableUpdate,
@@ -277,12 +282,19 @@ export function useForecastReport(params: ForecastParams = {}): Query<ForecastRe
 
 // ─── Relances ───
 
-export function useRelanceConfig(): Query<RelanceConfig> {
+/**
+ * `enabled` n'est pas décoratif : la route est réservée aux comptes en
+ * écriture, et l'appeler depuis un compte lecteur produit un 403 à chaque
+ * affichage de la page — une erreur dans la console pour une information
+ * qu'on ne comptait de toute façon pas montrer.
+ */
+export function useRelanceConfig(enabled = true): Query<RelanceConfig> {
   return useQuery({
     queryKey: queryKeys.relances.config,
     queryFn: ({ signal }) => relancesApi.config(signal),
     // La configuration d'envoi ne change qu'au redémarrage d'un conteneur.
     staleTime: 5 * 60_000,
+    enabled,
   })
 }
 
@@ -290,6 +302,94 @@ export function useSendRelanceBatch(): Mutation<RelanceBatch, RelanceKind> {
   const client = useQueryClient()
   return useMutation({
     mutationFn: (kind: RelanceKind) => relancesApi.sendBatch(kind),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.relances.all })
+      void client.invalidateQueries({ queryKey: ['logs'] })
+    },
+  })
+}
+
+/** Réglages du compte connecté. */
+export function useMyRelancePreference(): Query<RelancePreference> {
+  return useQuery({
+    queryKey: queryKeys.relances.myPreference,
+    queryFn: ({ signal }) => relancesApi.myPreference(signal),
+    // Un compte sans fiche responsable rattachée reçoit un 404 : c'est une
+    // réponse définitive, pas une panne passagère. Réessayer afficherait un
+    // spinner pendant plusieurs secondes avant le même message.
+    retry: false,
+  })
+}
+
+export function useUpdateMyRelancePreference(): Mutation<
+  RelancePreference,
+  RelancePreferenceUpdate
+> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: RelancePreferenceUpdate) =>
+      relancesApi.updateMyPreference(payload),
+    onSuccess: (preference) => {
+      // La réponse porte déjà les réglages effectifs : les réécrire évite un
+      // aller-retour et le clignotement du formulaire entre deux états.
+      client.setQueryData(queryKeys.relances.myPreference, preference)
+      void client.invalidateQueries({ queryKey: queryKeys.relances.all })
+    },
+  })
+}
+
+/** Réglages de toute l'équipe — réservé aux administrateurs. */
+export function useRelancePreferences(
+  tous = false,
+  enabled = true,
+): Query<RelancePreference[]> {
+  return useQuery({
+    queryKey: queryKeys.relances.preferences(tous),
+    queryFn: ({ signal }) => relancesApi.preferences(tous, signal),
+    enabled,
+  })
+}
+
+export function useUpdateRelancePreference(): Mutation<
+  RelancePreference,
+  { responsableId: Uuid; payload: RelancePreferenceUpdate }
+> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ responsableId, payload }) =>
+      relancesApi.updatePreference(responsableId, payload),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.relances.all })
+    },
+  })
+}
+
+/** Aperçu du récapitulatif d'une personne. */
+export function useRelanceDigest(
+  responsableId: Uuid | null,
+): Query<RelanceDigestPreview> {
+  return useQuery({
+    queryKey: queryKeys.relances.digest(responsableId ?? 'aucun'),
+    queryFn: ({ signal }) => relancesApi.digest(responsableId as Uuid, signal),
+    enabled: responsableId !== null,
+  })
+}
+
+export function useSendRelanceDigest(): Mutation<RelanceDigestSendResult, Uuid> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (responsableId: Uuid) => relancesApi.sendDigest(responsableId),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.relances.all })
+      void client.invalidateQueries({ queryKey: ['logs'] })
+    },
+  })
+}
+
+export function useSendRelanceDigestBatch(): Mutation<RelanceDigestBatch, boolean> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (dryRun: boolean) => relancesApi.sendDigestBatch(dryRun),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: queryKeys.relances.all })
       void client.invalidateQueries({ queryKey: ['logs'] })

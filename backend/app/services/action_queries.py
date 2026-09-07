@@ -57,8 +57,11 @@ VIEW_LABELS: dict[ActionView, str] = {
 # Prédicats élémentaires
 # ---------------------------------------------------------------------------
 
-def _open():
+def is_open():
     """Action non terminée : le statut seul ne suffit pas.
+
+    Publique parce que le moteur de relance compose ses propres sections à
+    partir de ce prédicat, sans passer par une `ActionView`.
 
     Une action peut afficher 100 % sans que son statut ait été rafraîchi, et
     inversement. On croise les deux pour ne jamais relancer quelqu'un sur une
@@ -78,12 +81,12 @@ def is_overdue(today: date | None = None):
     des trois vues `overdue` / `today` / `due_soon`.
     """
     today = today or today_utc()
-    return and_(Action.deadline.isnot(None), Action.deadline < today, _open())
+    return and_(Action.deadline.isnot(None), Action.deadline < today, is_open())
 
 
 def is_due_today(today: date | None = None):
     today = today or today_utc()
-    return and_(Action.deadline == today, _open())
+    return and_(Action.deadline == today, is_open())
 
 
 def is_due_soon(days: int = 3, today: date | None = None):
@@ -97,7 +100,7 @@ def is_due_soon(days: int = 3, today: date | None = None):
     return and_(
         Action.deadline > today,
         Action.deadline <= today + timedelta(days=days),
-        _open(),
+        is_open(),
     )
 
 
@@ -123,7 +126,7 @@ def is_in_progress():
             and_(Action.progress > 0.0, Action.progress < 100.0),
             Action.status == ActionStatus.EN_COURS,
         ),
-        _open(),
+        is_open(),
     )
 
 
@@ -140,7 +143,49 @@ def week_bounds(weeks_ahead: int = 1, today: date | None = None) -> tuple[date, 
 def is_upcoming(weeks_ahead: int = 1, today: date | None = None):
     """Actions dont l'échéance tombe dans la semaine visée."""
     start, end = week_bounds(weeks_ahead, today)
-    return and_(Action.deadline >= start, Action.deadline <= end, _open())
+    return and_(Action.deadline >= start, Action.deadline <= end, is_open())
+
+
+def is_pending(horizon_days: int = 3, today: date | None = None):
+    """Action ouverte que rien ne rend urgente aujourd'hui.
+
+    C'est le complément exact des trois fenêtres de temps : ni en retard, ni
+    due aujourd'hui, ni dans l'horizon d'alerte. Soit une action sans échéance,
+    soit une échéance encore lointaine.
+
+    Le complément est calculé sur la date plutôt qu'en niant les trois
+    prédicats : une négation de `AND` sur des colonnes nullables laisse passer
+    les `NULL` en `UNKNOWN`, et les actions sans échéance — celles qui
+    justifient précisément cette vue — disparaîtraient du résultat.
+    """
+    today = today or today_utc()
+    return and_(
+        or_(
+            Action.deadline.is_(None),
+            Action.deadline > today + timedelta(days=horizon_days),
+        ),
+        is_open(),
+    )
+
+
+def not_standby():
+    """Action qui n'est pas mise en veille, ni elle ni son projet.
+
+    La veille ne retire rien des tableaux de bord : elle dit seulement « ne
+    relancez personne là-dessus ». Un projet suspendu accumule des retards que
+    personne ne peut solder ; sans cette sortie, ils gonflent chaque rappel
+    jusqu'à noyer les actions sur lesquelles quelqu'un peut réellement agir.
+
+    Le projet est testé par sous-requête plutôt que par jointure : la même
+    requête est construite par six routes, dont une qui compte via
+    `COUNT(*) OVER ()`, et changer son `FROM` fausserait ce décompte.
+    """
+    return and_(
+        Action.is_standby.is_(False),
+        Action.project_id.notin_(
+            select(Project.id).where(Project.is_standby.is_(True))
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +194,7 @@ def is_upcoming(weeks_ahead: int = 1, today: date | None = None):
 
 def _view_condition(view: ActionView, today: date, days: int, weeks_ahead: int):
     if view is ActionView.OPEN:
-        return _open()
+        return is_open()
     if view is ActionView.OVERDUE:
         return is_overdue(today)
     if view is ActionView.TODAY:
@@ -165,9 +210,9 @@ def _view_condition(view: ActionView, today: date, days: int, weeks_ahead: int):
     if view is ActionView.DONE:
         return or_(Action.status == ActionStatus.TERMINE, Action.progress >= 100.0)
     if view is ActionView.UNASSIGNED:
-        return and_(~Action.responsables.any(), _open())
+        return and_(~Action.responsables.any(), is_open())
     if view is ActionView.NO_DEADLINE:
-        return and_(Action.deadline.is_(None), _open())
+        return and_(Action.deadline.is_(None), is_open())
     return None  # ActionView.ALL
 
 
@@ -175,7 +220,9 @@ def count_all_views(
     *,
     project_id=None,
     responsable_id=None,
+    resp_suivi_id=None,
     active_projects_only: bool = False,
+    exclude_standby: bool = False,
     due_soon_days: int = 3,
     weeks_ahead: int = 1,
     extra_condition: "ColumnElement[bool] | None" = None,
@@ -209,6 +256,10 @@ def count_all_views(
         )
     if responsable_id is not None:
         stmt = stmt.where(Action.responsables.any(Responsable.id == responsable_id))
+    if resp_suivi_id is not None:
+        stmt = stmt.where(Action.suiveurs.any(Responsable.id == resp_suivi_id))
+    if exclude_standby:
+        stmt = stmt.where(not_standby())
     if extra_condition is not None:
         stmt = stmt.where(extra_condition)
 
@@ -220,12 +271,15 @@ def build_actions_query(
     view: ActionView = ActionView.ALL,
     project_id=None,
     responsable_id=None,
+    resp_suivi_id=None,
     responsable_name: str | None = None,
     status: ActionStatus | None = None,
     search: str | None = None,
     active_projects_only: bool = False,
+    exclude_standby: bool = False,
     due_soon_days: int = 3,
     weeks_ahead: int = 1,
+    extra_condition: "ColumnElement[bool] | None" = None,
     today: date | None = None,
 ) -> Select:
     """Requête `Select(Action)` correspondant aux filtres demandés."""
@@ -250,10 +304,18 @@ def build_actions_query(
     # par responsable et fausserait à la fois le LIMIT et les totaux.
     if responsable_id is not None:
         stmt = stmt.where(Action.responsables.any(Responsable.id == responsable_id))
+    if resp_suivi_id is not None:
+        # Colonne E. Elle passe par la table de liaison, jamais par le texte
+        # brut `Action.resp_suivi` : celui-ci est composite (« Andry, Xavier »)
+        # et une comparaison de chaînes y raterait une personne sur deux.
+        stmt = stmt.where(Action.suiveurs.any(Responsable.id == resp_suivi_id))
     if responsable_name is not None:
         stmt = stmt.where(
             Action.responsables.any(Responsable.display_name == responsable_name)
         )
+
+    if exclude_standby:
+        stmt = stmt.where(not_standby())
 
     if status is not None:
         stmt = stmt.where(Action.status == status)
@@ -267,6 +329,12 @@ def build_actions_query(
                 Action.commentaire.ilike(motif),
             )
         )
+
+    # Échappatoire pour les conditions que les paramètres nommés ne savent pas
+    # exprimer — le périmètre « suivi *ou* réalisation » du moteur de relance,
+    # qui est une disjonction et non un filtre supplémentaire.
+    if extra_condition is not None:
+        stmt = stmt.where(extra_condition)
 
     return stmt
 

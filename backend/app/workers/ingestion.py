@@ -185,7 +185,9 @@ def _upsert_action(db, project: Project, row: ParsedAction) -> bool:
     """
     existing = (
         db.query(Action)
-        .options(selectinload(Action.responsables))
+        # Les deux collections sont réécrites plus bas : sans préchargement,
+        # chaque action du classeur déclencherait deux requêtes de plus.
+        .options(selectinload(Action.responsables), selectinload(Action.suiveurs))
         .filter(Action.project_id == project.id, Action.numero == row.numero)
         .first()
     )
@@ -229,12 +231,21 @@ def _upsert_action(db, project: Project, row: ParsedAction) -> bool:
         db.add(action)
         db.flush()  # Obtenir l'ID avant d'ajouter les responsables
 
-    _sync_responsables(db, action, row.responsable_names)
+    _sync_responsables(db, action.responsables, row.responsable_names)
+    # Colonne E. Elle n'était conservée que sous forme de texte : le
+    # responsable de suivi, celui qui pilote réellement l'action, n'avait donc
+    # aucune adresse et ne pouvait pas être relancé. La résoudre en fiches
+    # applique les mêmes règles de rapprochement qu'à la colonne D.
+    _sync_responsables(db, action.suiveurs, row.resp_suivi_names)
     return is_new
 
 
-def _sync_responsables(db, action: Action, names: list[str]) -> None:
-    """Aligne la liste des responsables d'une action sur celle du fichier.
+def _sync_responsables(db, collection, names: list[str]) -> None:
+    """Aligne une collection de responsables sur la liste lue dans le fichier.
+
+    `collection` est `action.responsables` (colonne D) ou `action.suiveurs`
+    (colonne E) : les deux se rapprochent selon les mêmes règles, et deux
+    implémentations auraient fini par diverger.
 
     Le `clear()` systématique d'avant produisait un DELETE + INSERT de toutes
     les associations à chaque synchronisation, même quand rien n'avait changé —
@@ -243,11 +254,11 @@ def _sync_responsables(db, action: Action, names: list[str]) -> None:
     voulus = dedupe(names)
     cles_voulues = {normalize_key(n) for n in voulus}
 
-    for responsable in list(action.responsables):
+    for responsable in list(collection):
         if normalize_key(responsable.display_name) not in cles_voulues:
-            action.responsables.remove(responsable)
+            collection.remove(responsable)
 
-    deja = {normalize_key(r.display_name): r for r in action.responsables}
+    deja = {normalize_key(r.display_name): r for r in collection}
 
     for nom in voulus:
         cle = normalize_key(nom)
@@ -261,7 +272,7 @@ def _sync_responsables(db, action: Action, names: list[str]) -> None:
             resp = Responsable(display_name=nom, name_key=cle, is_mapped=False)
             db.add(resp)
             db.flush()
-        action.responsables.append(resp)
+        collection.append(resp)
         deja[cle] = resp
 
 

@@ -7,6 +7,7 @@ import {
   IconFolder,
   IconGrid,
   IconClipboard,
+  IconMail,
   IconPieChart,
   IconUsers,
   type IconProps,
@@ -26,6 +27,12 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
   { to: '/actions', label: 'Actions', icon: IconActivity, keywords: ['tâches', 'todo', 'retard'] },
   { to: '/agenda', label: 'Agenda', icon: IconCalendar, keywords: ['calendrier', 'mois', 'fériés'] },
   { to: '/responsables', label: 'Responsables', icon: IconUsers, keywords: ['équipe', 'personnes', 'charge'] },
+  {
+    to: '/relances',
+    label: 'Relances',
+    icon: IconMail,
+    keywords: ['email', 'rappel', 'notification', 'cadence', 'récapitulatif'],
+  },
   { to: '/rapports', label: 'Rapports', icon: IconPieChart, keywords: ['reporting', 'export', 'indicateurs'] },
   { to: '/creneaux', label: 'Créneaux', icon: IconCalendarPlus, keywords: ['slots', 'disponibilités', 'semaine'] },
   {

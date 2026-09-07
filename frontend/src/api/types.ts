@@ -132,6 +132,16 @@ export interface Action {
   /** Calculé côté serveur : 100 si livrée à temps, 0 sinon. */
   otd: number
   responsables: Responsable[]
+  /**
+   * Responsables de suivi résolus en fiches — ce sont eux qui reçoivent le
+   * récapitulatif de relance. `resp_suivi` reste la cellule brute du classeur ;
+   * cette liste en est la lecture exploitable, découpée quand la cellule nomme
+   * plusieurs personnes.
+   */
+  suiveurs: Responsable[]
+  /** En veille : l'action reste au tableau de bord mais sort des relances. */
+  is_standby: boolean
+  standby_reason: string | null
   created_at: IsoDateTime
   updated_at: IsoDateTime
 }
@@ -160,6 +170,8 @@ export interface ActionUpdate {
   status?: AssignableActionStatus
   phase?: string | null
   responsable_names?: string[]
+  is_standby?: boolean
+  standby_reason?: string | null
 }
 
 // ─── Projets ───
@@ -171,6 +183,13 @@ export interface Project {
   source_file_path: string
   has_phases: boolean
   is_active: boolean
+  /**
+   * En veille : le projet reste visible et compté, mais aucune de ses actions
+   * ne déclenche de relance. Distinct de `is_active: false`, qui le fait
+   * disparaître des tableaux de bord.
+   */
+  is_standby: boolean
+  standby_reason: string | null
   created_at: IsoDateTime
   last_synced_at: IsoDateTime | null
 }
@@ -191,6 +210,8 @@ export interface ProjectUpdate {
   source_file_path?: string
   is_active?: boolean
   has_phases?: boolean
+  is_standby?: boolean
+  standby_reason?: string | null
 }
 
 // ─── Journaux ───
@@ -209,6 +230,9 @@ export interface RelanceLog {
   responsable_id: Uuid
   sent_at: IsoDateTime
   email_status: string
+  /** `digest` pour un récapitulatif planifié, sinon la nature du rappel. */
+  kind: string
+  action_count: number
 }
 
 // ─── Rapports ───
@@ -350,6 +374,119 @@ export interface RelanceBatch {
   failed: number
   skipped: number
   results: RelanceSendResult[]
+}
+
+// ─── Récapitulatif planifié ───
+
+/** Quelles actions figurent dans le récapitulatif d'une personne. */
+export type RelancePerimetre = 'suivi' | 'realisation' | 'les_deux'
+
+export const RELANCE_PERIMETRE_LABELS: Record<RelancePerimetre, string> = {
+  suivi: 'Actions que je suis',
+  realisation: 'Actions que je réalise',
+  les_deux: 'Les deux',
+}
+
+/** Sections du récapitulatif, dans l'ordre d'apparition dans le message. */
+export type RelanceSectionKey = 'overdue' | 'today' | 'due_soon' | 'pending'
+
+export const RELANCE_SECTION_LABELS: Record<RelanceSectionKey, string> = {
+  overdue: 'En retard',
+  today: "À rendre aujourd'hui",
+  due_soon: 'Échéances proches',
+  pending: 'En attente',
+}
+
+/** Lundi = 0, comme `date.weekday()` côté Python. */
+export const JOURS_SEMAINE = [
+  { value: 0, court: 'L', label: 'lundi' },
+  { value: 1, court: 'M', label: 'mardi' },
+  { value: 2, court: 'M', label: 'mercredi' },
+  { value: 3, court: 'J', label: 'jeudi' },
+  { value: 4, court: 'V', label: 'vendredi' },
+  { value: 5, court: 'S', label: 'samedi' },
+  { value: 6, court: 'D', label: 'dimanche' },
+] as const
+
+export interface RelancePreference {
+  responsable_id: Uuid
+  responsable_name: string
+  email: string | null
+  is_mapped: boolean
+  /** Faux tant que rien n'a été réglé : les valeurs sont celles par défaut. */
+  personnalise: boolean
+  enabled: boolean
+  perimeter: RelancePerimetre
+  /** Indices de jours ; leur nombre *est* la fréquence hebdomadaire. */
+  days_of_week: number[]
+  send_hour: number
+  include_overdue: boolean
+  include_today: boolean
+  include_due_soon: boolean
+  include_pending: boolean
+  horizon_days: number
+  frequence_hebdomadaire: number
+  /** Cadence en clair, telle qu'elle figure en pied de message. */
+  cadence: string
+  jours_labels: string[]
+}
+
+export interface RelancePreferenceUpdate {
+  enabled?: boolean
+  perimeter?: RelancePerimetre
+  days_of_week?: number[]
+  send_hour?: number
+  include_overdue?: boolean
+  include_today?: boolean
+  include_due_soon?: boolean
+  include_pending?: boolean
+  horizon_days?: number
+}
+
+export interface RelanceSection {
+  key: RelanceSectionKey
+  label: string
+  intro: string
+  action_count: number
+  actions: ActionDigest[]
+}
+
+export interface RelanceDigestPreview {
+  responsable_id: Uuid
+  responsable_name: string
+  email: string | null
+  is_mapped: boolean
+  preference: RelancePreference
+  subject: string
+  action_count: number
+  sections: RelanceSection[]
+  html: string
+  text: string
+  would_send: boolean
+  skip_reason: string | null
+  /** Prochain envoi automatique, `null` si les relances sont coupées. */
+  next_send_at: IsoDateTime | null
+}
+
+export interface RelanceDigestSendResult {
+  responsable_id: Uuid
+  responsable_name: string
+  email: string | null
+  status: 'sent' | 'simulated' | 'failed' | 'skipped_no_email' | 'skipped'
+  action_count: number
+  detail: string | null
+  relance_log_id: Uuid | null
+}
+
+export interface RelanceDigestBatch {
+  generated_at: IsoDateTime
+  mode: string
+  considered: number
+  sent: number
+  simulated: number
+  failed: number
+  skipped: number
+  results: RelanceDigestSendResult[]
 }
 
 // ─── Utilisateurs ───

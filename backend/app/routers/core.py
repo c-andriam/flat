@@ -17,6 +17,7 @@ from app.models.project import (
     Responsable,
     SyncLog,
 )
+from app.models.user import User
 from app.schemas.project_schema import (
     ActionCreate,
     ActionOut,
@@ -49,7 +50,12 @@ from app.services.action_rules import (
     today_utc,
 )
 from app.services.events import publish_event
-from app.services.names import dedupe, normalize_key
+from app.services.names import (
+    dedupe,
+    normalize_key,
+    personnes_du_libelle,
+    split_personnes,
+)
 from app.services.health import perform_health_check_async
 from app.services.scoping import Scope, get_scope
 from app.services.security import require_reader, require_writer
@@ -133,7 +139,7 @@ async def _count(db: AsyncSession, stmt) -> int:
 
 
 async def _load_action(db: AsyncSession, action_id: uuid.UUID) -> Action | None:
-    """Recharge une action avec ses responsables.
+    """Recharge une action avec ses responsables et ses suiveurs.
 
     Indispensable après un commit : sérialiser `ActionOut.responsables` sur un
     objet dont la collection n'est pas chargée déclencherait un lazy-load hors
@@ -141,7 +147,11 @@ async def _load_action(db: AsyncSession, action_id: uuid.UUID) -> Action | None:
     """
     result = await db.execute(
         select(Action)
-        .options(selectinload(Action.responsables), selectinload(Action.project))
+        .options(
+            selectinload(Action.responsables),
+            selectinload(Action.suiveurs),
+            selectinload(Action.project),
+        )
         .filter(Action.id == action_id)
     )
     return result.scalars().first()
@@ -189,8 +199,12 @@ async def _verifier_bascule_phases(db: AsyncSession, project: Project, nouveau: 
         )
 
 
-async def _sync_action_responsables(db: AsyncSession, action: Action, noms: list[str]) -> None:
-    """Aligne les responsables d'une action sur la liste fournie.
+async def _sync_action_responsables(db: AsyncSession, collection, noms: list[str]) -> None:
+    """Aligne une collection de responsables d'une action sur la liste fournie.
+
+    `collection` est `action.responsables` (colonne D, réalisation) ou
+    `action.suiveurs` (colonne E, suivi) : le rapprochement obéit aux mêmes
+    règles, et deux implémentations auraient fini par diverger.
 
     Les noms inconnus sont créés en `is_mapped=False`, à associer ensuite à un
     email. On ne vide pas la collection pour la reconstruire : un DELETE +
@@ -200,14 +214,14 @@ async def _sync_action_responsables(db: AsyncSession, action: Action, noms: list
     voulus = dedupe(noms)
     cles_voulues = {normalize_key(n) for n in voulus}
 
-    for responsable in list(action.responsables):
+    for responsable in list(collection):
         if normalize_key(responsable.display_name) not in cles_voulues:
-            action.responsables.remove(responsable)
+            collection.remove(responsable)
 
     # Index des responsables déjà rattachés, y compris ceux créés plus haut
     # dans cette même boucle : la session n'est pas en autoflush, une fiche
     # créée à l'instant n'est pas encore visible par un SELECT.
-    deja = {normalize_key(r.display_name): r for r in action.responsables}
+    deja = {normalize_key(r.display_name): r for r in collection}
 
     for nom in voulus:
         cle = normalize_key(nom)
@@ -221,8 +235,49 @@ async def _sync_action_responsables(db: AsyncSession, action: Action, noms: list
         if responsable is None:
             responsable = Responsable(display_name=nom, name_key=cle, is_mapped=False)
             db.add(responsable)
-        action.responsables.append(responsable)
+        collection.append(responsable)
         deja[cle] = responsable
+
+
+async def _personnes_du_resp_suivi(db: AsyncSession, libelle: str | None) -> list[str]:
+    """Découpe la cellule « Resp. suivi » en personnes.
+
+    Le champ est du texte libre et parfois composite — « Andry II, Xavier ».
+    Tant qu'il n'existait que sous cette forme, le responsable de suivi
+    n'avait pas d'adresse et ne pouvait pas être relancé.
+
+    Les emails connus ne sont chargés que si le libellé est ambigu. Un tiret
+    peut séparer deux personnes (« karine - hassen ») ou appartenir à un
+    prénom composé (« Jean-Pierre ») ; seule l'existence d'une adresse au nom
+    complet tranche. Faire la requête systématiquement coûterait un
+    aller-retour à chaque écriture d'action pour un cas rare.
+    """
+    libelle = (libelle or "").strip()
+    if not libelle:
+        return []
+
+    morceaux = split_personnes(libelle)
+    if len(morceaux) <= 1:
+        return morceaux or [libelle]
+
+    emails = set(
+        (await db.execute(select(Responsable.email).filter(Responsable.email.isnot(None))))
+        .scalars()
+        .all()
+    )
+    emails.update(
+        (await db.execute(select(User.email).filter(User.email.isnot(None))))
+        .scalars()
+        .all()
+    )
+    return personnes_du_libelle(libelle, emails)
+
+
+async def _sync_action_suiveurs(db: AsyncSession, action: Action, libelle: str | None) -> None:
+    """Réaligne les responsables de suivi sur le libellé de la colonne E."""
+    await _sync_action_responsables(
+        db, action.suiveurs, await _personnes_du_resp_suivi(db, libelle)
+    )
 
 
 def _valider_phase(project: Project, phase: str | None) -> str | None:
@@ -313,7 +368,10 @@ async def get_project(
 ):
     result = await db.execute(
         select(Project)
-        .options(selectinload(Project.actions).selectinload(Action.responsables))
+        .options(
+            selectinload(Project.actions).selectinload(Action.responsables),
+            selectinload(Project.actions).selectinload(Action.suiveurs),
+        )
         .filter(Project.id == project_id)
     )
     project = result.scalars().first()
@@ -499,8 +557,13 @@ async def _run_actions_query(
 
     # Le projet est chargé avec les responsables : `ActionOut` expose son code
     # et son nom, et une liste de 25 actions ne doit pas déclencher 25 requêtes.
+    # `suiveurs` est du même ordre : le champ figure dans `ActionOut`, et
+    # Pydantic le lit à la sérialisation — sans préchargement, ce serait un
+    # lazy-load hors contexte greenlet, donc une erreur, pas une lenteur.
     stmt = apply_order(stmt, sort, order).options(
-        selectinload(Action.responsables), selectinload(Action.project)
+        selectinload(Action.responsables),
+        selectinload(Action.suiveurs),
+        selectinload(Action.project),
     )
     result = await db.execute(
         stmt.add_columns(func.count().over().label("total")).limit(limit).offset(offset)
@@ -885,7 +948,10 @@ async def create_action(payload: ActionCreate, db: AsyncSession = Depends(get_as
         # exigerait de charger toutes les actions du responsable, une IO
         # synchrone impossible ici (MissingGreenlet). La table d'association
         # est de toute façon alimentée depuis ce côté-ci de la relation.
-        await _sync_action_responsables(db, action, payload.responsable_names)
+        await _sync_action_responsables(
+            db, action.responsables, payload.responsable_names
+        )
+        await _sync_action_suiveurs(db, action, payload.resp_suivi)
         db.add(action)
 
         try:
@@ -953,7 +1019,14 @@ async def update_action(
 ):
     result = await db.execute(
         select(Action)
-        .options(selectinload(Action.responsables), selectinload(Action.project))
+        .options(
+            selectinload(Action.responsables),
+            # `suiveurs` est réécrite quand `resp_suivi` change : y accéder
+            # sans préchargement déclencherait un lazy-load hors contexte
+            # greenlet (MissingGreenlet).
+            selectinload(Action.suiveurs),
+            selectinload(Action.project),
+        )
         .filter(Action.id == action_id)
     )
     action = result.scalars().first()
@@ -988,7 +1061,12 @@ async def update_action(
         setattr(action, field, value)
 
     if noms is not None:
-        await _sync_action_responsables(db, action, noms)
+        await _sync_action_responsables(db, action.responsables, noms)
+
+    # `resp_suivi` est une colonne *et* pilote une relation : modifier le
+    # texte sans réaligner la liaison laisserait relancer l'ancien suiveur.
+    if "resp_suivi" in update_data:
+        await _sync_action_suiveurs(db, action, update_data["resp_suivi"])
 
     # Les indicateurs se déduisent de l'avancement et des dates, sauf lorsque
     # l'appelant en impose un explicitement — un chef de projet doit pouvoir

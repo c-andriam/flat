@@ -184,11 +184,19 @@ class Settings:
         return _csv_set("BOOTSTRAP_ADMIN_EMAILS")
 
     # --- Relances ---
-    # Fenêtre d'alerte : une action est relancée à partir de J-3.
+    # Fenêtre d'alerte par défaut : une action est signalée à partir de J-3.
+    # Chaque personne peut la redéfinir dans ses préférences de relance.
     relance_horizon_days: int = _int("RELANCE_HORIZON_DAYS", 3)
-    # Délai minimal entre deux relances d'un même responsable, pour éviter
-    # qu'un beat quotidien ne transforme l'outil en spam.
+    # Délai minimal entre deux relances d'un même responsable. Ne concerne que
+    # les rappels ponctuels par nature (`/relances/{id}/send`) : le
+    # récapitulatif planifié est cadencé par les préférences de chacun, et son
+    # garde-fou est « un seul envoi par jour », pas un délai glissant.
     relance_cooldown_days: int = _int("RELANCE_COOLDOWN_DAYS", 3)
+    # Fuseau dans lequel s'entendent les heures d'envoi choisies par les
+    # utilisateurs. Il doit rester aligné sur celui du planificateur Celery :
+    # `send_hour = 8` doit vouloir dire 8 h pour la personne qui l'a réglé,
+    # pas 8 h UTC — soit 11 h à Antananarivo.
+    relance_timezone: str = os.getenv("RELANCE_TIMEZONE", "Indian/Antananarivo").strip()
 
 
 settings = Settings()

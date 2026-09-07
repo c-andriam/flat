@@ -229,6 +229,20 @@ class ActionUpdate(PartialUpdate):
             )
         return v
     phase: str | None = Field(None, max_length=10, description="Changer la phase de l'action.")
+    is_standby: bool | None = Field(
+        None,
+        description=(
+            "Mettre l'action en veille, ou l'en sortir. Une action en veille "
+            "reste comptée dans les tableaux de bord — c'est ce qui la "
+            "distingue d'une suppression — mais sort des relances : un travail "
+            "suspendu par un tiers ne doit pas gonfler le rappel de son "
+            "responsable semaine après semaine."
+        ),
+    )
+    standby_reason: str | None = Field(
+        None, max_length=2000,
+        description="Motif de la mise en veille — « en attente du prestataire ».",
+    )
     responsable_names: list[str] | None = Field(
         None,
         min_length=1,
@@ -295,6 +309,25 @@ class ActionOut(ActionBase):
         ),
     )
     responsables: list[ResponsableOut] = []
+    suiveurs: list[ResponsableOut] = Field(
+        default_factory=list,
+        description=(
+            "Responsables de suivi résolus en fiches — c'est à eux que part "
+            "le récapitulatif de relance. Le champ texte `resp_suivi` reste la "
+            "cellule brute du classeur ; cette liste en est la lecture "
+            "exploitable, découpée quand la cellule nomme plusieurs personnes."
+        ),
+    )
+    is_standby: bool = Field(
+        False,
+        description=(
+            "Action mise en veille : elle reste dans les tableaux de bord mais "
+            "ne déclenche plus aucune relance."
+        ),
+    )
+    standby_reason: str | None = Field(
+        None, description="Motif de la mise en veille, le cas échéant."
+    )
     created_at: datetime
     updated_at: datetime
 
@@ -343,6 +376,19 @@ class ProjectUpdate(PartialUpdate):
             "projet porte déjà des actions."
         ),
     )
+    is_standby: bool | None = Field(
+        None,
+        description=(
+            "Mettre le projet en veille. Distinct de `is_active=false` : un "
+            "projet en veille reste visible et compté dans les tableaux de "
+            "bord, mais aucune de ses actions ne déclenche de relance. C'est "
+            "la réponse à un chantier suspendu — budget gelé, prestataire en "
+            "attente — dont les retards ne sont imputables à personne."
+        ),
+    )
+    standby_reason: str | None = Field(
+        None, max_length=2000, description="Motif de la mise en veille."
+    )
 
 
 class ProjectOut(ProjectBase):
@@ -350,6 +396,10 @@ class ProjectOut(ProjectBase):
 
     id: uuid.UUID
     is_active: bool
+    is_standby: bool = Field(
+        False, description="Projet en veille : ses actions ne sont plus relancées."
+    )
+    standby_reason: str | None = None
     created_at: datetime
     last_synced_at: datetime | None = None
 
@@ -378,3 +428,13 @@ class RelanceLogOut(BaseModel):
     responsable_id: uuid.UUID
     sent_at: datetime
     email_status: str
+    kind: str = Field(
+        "digest",
+        description=(
+            "`digest` pour un récapitulatif planifié, sinon la nature du "
+            "rappel ponctuel (`overdue`, `today`, `due_soon`)."
+        ),
+    )
+    action_count: int = Field(
+        0, description="Nombre d'actions citées dans le message."
+    )

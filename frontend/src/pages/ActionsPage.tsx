@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
-import { useActionSummary, useActions, useProjects } from '@/api/queries'
+import { type ApiError } from '@/api/client'
+import { useActionSummary, useActions, useProjects, useUpdateAction } from '@/api/queries'
 import {
   ACTION_VIEWS,
   ACTION_VIEW_LABELS,
@@ -23,10 +24,12 @@ import { DataTable, type Column } from '@/ui/DataTable'
 import { EmptyState } from '@/ui/EmptyState'
 import { ErrorState } from '@/ui/ErrorState'
 import { SelectField, TextField } from '@/ui/Field'
+import { Badge } from '@/ui/Badge'
 import { IconActivity, IconPlus } from '@/ui/Icon'
 import { PageHeader } from '@/ui/PageHeader'
 import { Pagination } from '@/ui/Pagination'
 import { ProgressBar } from '@/ui/ProgressBar'
+import { useToast } from '@/ui/useToast'
 
 const PAGE_SIZE = 25
 
@@ -39,6 +42,8 @@ function isActionView(value: string | null): value is ActionView {
 
 export function ActionsPage() {
   const { canWrite } = useAuth()
+  const toast = useToast()
+  const updateAction = useUpdateAction()
   const [params, setParams] = useSearchParams()
   const [modalOpen, setModalOpen] = useState(false)
   const [offset, setOffset] = useState(0)
@@ -52,6 +57,37 @@ export function ActionsPage() {
   // P01 » se transmet alors par simple copie du lien.
   const sort: ActionSort | null = isActionSort(params.get('tri')) ? (params.get('tri') as ActionSort) : null
   const sortOrder: SortOrder = params.get('sens') === 'desc' ? 'desc' : 'asc'
+
+  /**
+   * Mise en veille : l'action reste comptée dans les tableaux de bord mais
+   * sort des relances. C'est la réponse à un travail suspendu par un tiers,
+   * dont le retard n'est imputable à personne et gonflait le récapitulatif de
+   * son responsable semaine après semaine.
+   */
+  const basculerVeille = (action: Action) => {
+    const enVeille = !action.is_standby
+    updateAction.mutate(
+      {
+        id: action.id,
+        payload: {
+          is_standby: enVeille,
+          // Aucun motif n'est saisi depuis la liste, et on efface celui d'une
+          // veille précédente : le conserver ferait réapparaître une
+          // justification obsolète au prochain passage en veille.
+          standby_reason: null,
+        },
+      },
+      {
+        onSuccess: () =>
+          toast.success(
+            enVeille
+              ? `${action.numero} mise en veille : elle ne déclenche plus de relance.`
+              : `${action.numero} réintégrée aux relances.`,
+          ),
+        onError: (error: ApiError) => toast.error(error.message),
+      },
+    )
+  }
 
   const summaryQuery = useActionSummary()
   const projectsQuery = useProjects({ is_active: true, limit: 200 })
@@ -125,8 +161,21 @@ export function ActionsPage() {
       header: 'Description',
       render: (action) => (
         <div className="min-w-[200px]">
-          <p className="line-clamp-2 text-fg">{action.description}</p>
-          {action.commentaire ? (
+          <p className="line-clamp-2 text-fg">
+            {action.is_standby ? (
+              // Sans ce repère, une action en retard qui ne déclenche aucune
+              // relance passe pour un dysfonctionnement du moteur d'envoi.
+              <Badge tone="neutral" className="mr-1.5 align-middle">
+                En veille
+              </Badge>
+            ) : null}
+            {action.description}
+          </p>
+          {action.standby_reason ? (
+            <p className="mt-0.5 line-clamp-1 text-[12px] text-fg-subtle">
+              En veille : {action.standby_reason}
+            </p>
+          ) : action.commentaire ? (
             <p className="mt-0.5 line-clamp-1 text-[12px] text-fg-subtle">{action.commentaire}</p>
           ) : null}
         </div>
@@ -143,6 +192,28 @@ export function ActionsPage() {
         </span>
       ),
       className: 'w-44',
+      hideOnMobile: true,
+    },
+    {
+      key: 'suivi',
+      header: 'Resp. suivi',
+      render: (action) => (
+        // Le destinataire du récapitulatif : la colonne existe pour qu'on
+        // sache qui sera relancé sans ouvrir l'action.
+        <span
+          className="text-fg-muted"
+          title={
+            action.suiveurs.length > 0
+              ? 'Destinataire du récapitulatif de relance.'
+              : "Aucune fiche rattachée : personne n'est relancé sur cette action."
+          }
+        >
+          {action.suiveurs.length > 0
+            ? action.suiveurs.map((suiveur) => suiveur.display_name).join(', ')
+            : (action.resp_suivi ?? '—')}
+        </span>
+      ),
+      className: 'w-40',
       hideOnMobile: true,
     },
     {
@@ -167,6 +238,30 @@ export function ActionsPage() {
       className: 'w-32',
       sortKey: 'status',
     },
+    ...(canWrite
+      ? [
+          {
+            key: 'veille',
+            header: '',
+            render: (action: Action) => (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={updateAction.isPending}
+                title={
+                  action.is_standby
+                    ? 'Reprendre le suivi : cette action redeviendra relançable.'
+                    : "Mettre en veille : l'action reste au tableau de bord mais sort des relances."
+                }
+                onClick={() => basculerVeille(action)}
+              >
+                {action.is_standby ? 'Reprendre' : 'Mettre en veille'}
+              </Button>
+            ),
+            className: 'w-40',
+          } satisfies Column<Action>,
+        ]
+      : []),
   ]
 
   const counts = summaryQuery.data?.counts

@@ -27,6 +27,7 @@ from html import escape
 
 from app.schemas.report_schema import ActionDigestOut
 from app.services.digests import echeance_lisible
+from app.services.relance_digest import SectionKey, SectionSpec
 
 # --- Charte ----------------------------------------------------------------
 BLEU = "#1F4E9C"       # « Planifié »
@@ -134,7 +135,7 @@ def _barre_progression(progress: float, accent: str) -> str:
     )
 
 
-def _ligne_action(action: ActionDigestOut, ton: _Ton, index: int) -> str:
+def _ligne_action(action: ActionDigestOut, accent: str, index: int) -> str:
     fond = "#FFFFFF" if index % 2 == 0 else FOND
     projet = escape(action.project_code or "—")
     numero = escape(action.numero)
@@ -157,10 +158,10 @@ def _ligne_action(action: ActionDigestOut, ton: _Ton, index: int) -> str:
           <div style="font-size:13px;color:{ENCRE_DOUCE};margin-top:8px;">
             Avancement {pourcent}&nbsp;% &middot; date cible {date_cible}
           </div>
-          <div style="margin-top:6px;max-width:260px;">{_barre_progression(action.progress, ton.accent)}</div>
+          <div style="margin-top:6px;max-width:260px;">{_barre_progression(action.progress, accent)}</div>
         </td>
         <td bgcolor="{fond}" align="right" style="padding:14px 20px;border-bottom:1px solid {TRAIT};
-            font-family:{POLICE};font-size:14px;font-weight:600;color:{ton.accent};
+            font-family:{POLICE};font-size:14px;font-weight:600;color:{accent};
             white-space:nowrap;vertical-align:top;">
           {echeance}
         </td>
@@ -180,7 +181,7 @@ def build_email(
     sujet = ton.objet.format(n=len(actions))
     prenom = escape((responsable_name or "").split()[0] if responsable_name else "")
 
-    lignes = "".join(_ligne_action(a, ton, i) for i, a in enumerate(actions))
+    lignes = "".join(_ligne_action(a, ton.accent, i) for i, a in enumerate(actions))
 
     bouton = ""
     if app_url:
@@ -330,4 +331,264 @@ def _texte_brut(
         "--",
         "Message automatique du suivi de projets DSI — merci de ne pas y répondre.",
     ]
+    return "\n".join(corps)
+
+
+# ---------------------------------------------------------------------------
+# Récapitulatif planifié — un seul message, plusieurs sections
+# ---------------------------------------------------------------------------
+#
+# Les trois rappels séparés (retard, jour J, échéance proche) partaient à trois
+# heures différentes. Une personne concernée par les trois en recevait trois —
+# ou, la période de silence aidant, un seul choisi par l'ordre du
+# planificateur, sans qu'elle sache lequel manquait. Un message unique et
+# sectionné supprime les deux défauts.
+
+#: Couleur de chaque section. Le rouge reste réservé au retard : l'étendre aux
+#: autres sections lui ferait perdre sa valeur d'alerte.
+_ACCENTS_SECTION: dict[SectionKey, str] = {
+    SectionKey.OVERDUE: ROUGE,
+    SectionKey.TODAY: BLEU,
+    SectionKey.DUE_SOON: AMBRE,
+    SectionKey.PENDING: ENCRE_DOUCE,
+}
+
+
+def _bloc_section(
+    spec: SectionSpec, actions: list[ActionDigestOut], accent: str
+) -> str:
+    """Titre, compteur et tableau d'une section."""
+    lignes = "".join(_ligne_action(a, accent, i) for i, a in enumerate(actions))
+    return f"""
+        <tr>
+          <td style="padding:22px 24px 0;font-family:{POLICE};">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td bgcolor="{accent}" width="4"
+                    style="width:4px;font-size:0;line-height:0;">&nbsp;</td>
+                <td style="padding-left:10px;font-family:{POLICE};">
+                  <div style="font-size:16px;font-weight:700;color:{ENCRE};">
+                    {escape(spec.label)} &middot; {len(actions)}
+                  </div>
+                  <div style="font-size:13px;color:{ENCRE_DOUCE};margin-top:2px;">
+                    {escape(spec.intro)}
+                  </div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:12px 24px 0;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+                   border="0" style="width:100%;border-collapse:collapse;
+                   border:1px solid {TRAIT};">
+              <tr>
+                <th align="left" bgcolor="{FOND}" style="padding:9px 20px;font-family:{POLICE};
+                    font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+                    color:{ENCRE_DOUCE};font-weight:600;border-bottom:1px solid {TRAIT};">
+                  Action
+                </th>
+                <th align="right" bgcolor="{FOND}" style="padding:9px 20px;font-family:{POLICE};
+                    font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+                    color:{ENCRE_DOUCE};font-weight:600;border-bottom:1px solid {TRAIT};
+                    white-space:nowrap;">
+                  {escape(spec.colonne)}
+                </th>
+              </tr>
+              {lignes}
+            </table>
+          </td>
+        </tr>"""
+
+
+def _objet_digest(sections: list[tuple[SectionSpec, list[ActionDigestOut]]]) -> str:
+    """Objet du message : le total, et le retard s'il y en a.
+
+    L'objet est souvent tout ce qui est lu depuis un téléphone. Y faire
+    figurer le nombre d'actions en retard évite d'ouvrir le message pour
+    découvrir qu'il n'y avait rien d'urgent — ou l'inverse.
+    """
+    total = sum(len(actions) for _, actions in sections)
+    retard = sum(
+        len(actions) for spec, actions in sections if spec.key is SectionKey.OVERDUE
+    )
+    if retard:
+        return f"Suivi DSI — {total} action(s) dont {retard} en retard"
+    return f"Suivi DSI — {total} action(s) à suivre"
+
+
+def build_digest_email(
+    responsable_name: str,
+    sections: list[tuple[SectionSpec, list[ActionDigestOut]]],
+    *,
+    app_url: str | None = None,
+    cadence: str | None = None,
+    reglages_url: str | None = None,
+) -> EmailMessage:
+    """Construit le récapitulatif planifié d'une personne.
+
+    Args:
+        sections: sections dans l'ordre d'apparition. Les sections vides sont
+            écartées ici — un titre suivi d'un tableau vide se lit comme un
+            défaut d'affichage.
+        cadence: phrase décrivant la fréquence choisie, rappelée en pied de
+            message. Un destinataire qui ignore d'où vient un envoi
+            automatique le classe en indésirable au lieu de le régler.
+        reglages_url: lien vers la page de réglage, pour que la cadence soit
+            réglable plutôt que subie.
+    """
+    sections = [(spec, actions) for spec, actions in sections if actions]
+    total = sum(len(actions) for _, actions in sections)
+    sujet = _objet_digest(sections)
+    prenom = escape((responsable_name or "").split()[0] if responsable_name else "")
+
+    # La couleur d'en-tête suit la section la plus urgente présente : un
+    # bandeau rouge sur un message sans retard userait l'alerte.
+    accent_entete = next((_ACCENTS_SECTION[spec.key] for spec, _ in sections), BLEU)
+
+    blocs = "".join(
+        _bloc_section(spec, actions, _ACCENTS_SECTION[spec.key])
+        for spec, actions in sections
+    )
+
+    bouton = ""
+    if app_url:
+        bouton = f"""
+          <tr>
+            <td style="padding:22px 24px 4px;font-family:{POLICE};">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td bgcolor="{accent_entete}" style="padding:11px 22px;">
+                    <a href="{escape(app_url)}" style="color:#FFFFFF;font-size:14px;
+                        font-weight:600;text-decoration:none;font-family:{POLICE};">
+                      Ouvrir le suivi de projet
+                    </a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>"""
+
+    pied_cadence = ""
+    if cadence:
+        lien = ""
+        if reglages_url:
+            lien = (
+                f' <a href="{escape(reglages_url)}" style="color:{BLEU};">'
+                "Modifier la fréquence</a>."
+            )
+        pied_cadence = (
+            f'<div style="margin-top:6px;">Vous recevez ce récapitulatif '
+            f"{escape(cadence)}.{lien}</div>"
+        )
+
+    html = f"""<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{escape(sujet)}</title>
+</head>
+<body style="margin:0;padding:0;background-color:{FOND};">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+       bgcolor="{FOND}" style="background-color:{FOND};">
+  <tr>
+    <td align="center" style="padding:24px 12px;">
+
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0"
+             style="width:600px;max-width:600px;background-color:#FFFFFF;
+                    border:1px solid {TRAIT};border-collapse:collapse;">
+
+        <tr>
+          <td bgcolor="{accent_entete}" style="height:4px;line-height:4px;font-size:0;">&nbsp;</td>
+        </tr>
+
+        <tr>
+          <td style="padding:26px 24px 4px;font-family:{POLICE};">
+            <div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+                color:{ENCRE_DOUCE};">
+              Trimeta Group &middot; Suivi de projets DSI
+            </div>
+            <h1 style="margin:8px 0 0;font-size:23px;line-height:1.25;color:{ENCRE};
+                font-weight:700;">Vos actions &agrave; suivre</h1>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:14px 24px 0;font-family:{POLICE};font-size:15px;
+              line-height:1.6;color:{ENCRE};">
+            <p style="margin:0 0 12px;">Bonjour {prenom},</p>
+            <p style="margin:0;color:{ENCRE_DOUCE};">
+              Voici le point sur les {total} action(s) dont vous avez la charge.
+            </p>
+          </td>
+        </tr>
+        {blocs}
+        {bouton}
+
+        <tr>
+          <td style="padding:20px 24px 24px;border-top:1px solid {TRAIT};
+              font-family:{POLICE};font-size:12px;line-height:1.6;color:{ENCRE_DOUCE};">
+            Une action termin&eacute;e sort de ce r&eacute;capitulatif d&egrave;s que son
+            avancement passe &agrave; 100&nbsp;%. Une action durablement bloqu&eacute;e
+            peut &ecirc;tre mise en veille : elle reste au tableau de bord mais
+            n&rsquo;appara&icirc;t plus ici.
+            {pied_cadence}
+          </td>
+        </tr>
+
+      </table>
+    </td>
+  </tr>
+</table>
+</body>
+</html>"""
+
+    return EmailMessage(
+        subject=sujet,
+        html=html,
+        text=_texte_digest(responsable_name, sections, app_url, cadence),
+        action_count=total,
+    )
+
+
+def _texte_digest(
+    responsable_name: str,
+    sections: list[tuple[SectionSpec, list[ActionDigestOut]]],
+    app_url: str | None,
+    cadence: str | None,
+) -> str:
+    prenom = (responsable_name or "").split()[0] if responsable_name else ""
+    total = sum(len(actions) for _, actions in sections)
+
+    corps = [
+        f"Bonjour {prenom},".rstrip(),
+        "",
+        f"Voici le point sur les {total} action(s) dont vous avez la charge.",
+    ]
+
+    for spec, actions in sections:
+        corps += ["", f"{spec.label.upper()} ({len(actions)})", spec.intro, ""]
+        for action in actions:
+            projet = action.project_code or "—"
+            pourcent = int(round(action.progress or 0))
+            cible = action.deadline.strftime("%d/%m/%Y") if action.deadline else "—"
+            corps.append(
+                f"  - [{projet} {action.numero}] {action.description}\n"
+                f"    {echeance_lisible(action)} (date cible {cible}) — "
+                f"avancement {pourcent} %"
+            )
+
+    if app_url:
+        corps += ["", f"Suivi de projet : {app_url}"]
+    corps += [
+        "",
+        "--",
+        "Une action terminée sort de ce récapitulatif dès que son avancement "
+        "passe à 100 %.",
+    ]
+    if cadence:
+        corps.append(f"Vous recevez ce récapitulatif {cadence}.")
     return "\n".join(corps)

@@ -28,7 +28,10 @@ app.conf.task_routes = {
 app.conf.update(
     # Fuseau explicite : sans ça, `crontab(hour=8)` s'entend en UTC, soit 11 h
     # à Antananarivo (UTC+3) — les relances partaient en milieu de matinée.
-    timezone="Indian/Antananarivo",
+    # Même réglage que `settings.relance_timezone`, dont dépendent les heures
+    # d'envoi choisies par les utilisateurs : les désaligner décalerait chaque
+    # récapitulatif du delta entre les deux fuseaux.
+    timezone=settings.relance_timezone,
     enable_utc=True,
     # L'accusé de réception après exécution évite de perdre une tâche si le
     # worker est tué en plein import Excel : elle est redistribuée.
@@ -45,33 +48,30 @@ app.conf.update(
     broker_connection_retry_on_startup=True,
 )
 
-# Les trois rappels sont espacés pour ne pas empiler trois messages dans la
-# même minute chez un responsable concerné par plusieurs natures — et parce
-# que la période de silence les rendrait de toute façon mutuellement
-# exclusifs s'ils partaient ensemble.
+# Trois rappels distincts partaient auparavant à heure fixe — retard à 8 h 00,
+# jour J à 8 h 10, échéances proches le lundi à 8 h 20 — pour tout le monde à
+# la même cadence. Un responsable concerné par les trois recevait donc trois
+# messages, ou plutôt un seul : la période de silence éliminait les deux
+# suivants, sans qu'il sache lequel avait été retenu.
+#
+# Ils sont remplacés par un récapitulatif unique dont la cadence appartient à
+# chaque destinataire (`relance_preferences`). Le planificateur ne sait plus à
+# quelle heure envoyer : il déclenche la tâche à chaque heure ronde, et
+# celle-ci ne retient que les personnes dont c'est le créneau. Coût d'un
+# passage à vide : une requête indexée.
 app.conf.beat_schedule = {
     "marquer-actions-en-retard": {
         "task": "app.workers.notifications.mark_overdue_actions",
-        # En premier, pour que les statuts soient à jour avant les relances.
+        # En premier, pour que les statuts soient à jour avant les relances —
+        # d'où 7 h 45, avant le premier créneau d'envoi possible.
         "schedule": crontab(hour=7, minute=45),
     },
-    "relance-actions-en-retard": {
-        "task": "app.workers.notifications.check_and_send",
-        # `schedule: 86400.0` déclenchait la tâche 24 h après le démarrage du
-        # beat, donc à une heure qui dépendait du dernier redéploiement.
-        "schedule": crontab(hour=8, minute=0),
-        "kwargs": {"kind": "overdue"},
-    },
-    "rappel-jour-j": {
-        "task": "app.workers.notifications.check_and_send",
-        "schedule": crontab(hour=8, minute=10),
-        "kwargs": {"kind": "today"},
-    },
-    "rappel-echeances-proches": {
-        "task": "app.workers.notifications.check_and_send",
-        # Une fois par semaine seulement : ce rappel est de l'anticipation,
-        # pas une alerte. Le lundi matin, avant la réunion de suivi.
-        "schedule": crontab(hour=8, minute=20, day_of_week="mon"),
-        "kwargs": {"kind": "due_soon"},
+    "recapitulatifs-planifies": {
+        "task": "app.workers.notifications.send_scheduled_digests",
+        # `minute=0` et non `minute="*/15"` : `Reglage.doit_envoyer` compare
+        # l'heure, pas la minute, et quatre passages par heure enverraient
+        # quatre fois le même message si le garde-fou d'idempotence venait à
+        # céder.
+        "schedule": crontab(minute=0),
     },
 }

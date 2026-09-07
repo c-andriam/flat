@@ -13,6 +13,7 @@ import { NotFoundPage } from '@/pages/NotFoundPage'
 import { ProjectDetailPage } from '@/pages/ProjectDetailPage'
 import { ProjectsPage } from '@/pages/ProjectsPage'
 import { RapportsPage } from '@/pages/RapportsPage'
+import { RelancesPage } from '@/pages/RelancesPage'
 import { ResponsablesPage } from '@/pages/ResponsablesPage'
 import { SlotsPage } from '@/pages/SlotsPage'
 
@@ -42,6 +43,7 @@ export const router = createBrowserRouter([
           { path: '/actions', element: <ActionsPage /> },
           { path: '/agenda', element: <AgendaPage /> },
           { path: '/responsables', element: <ResponsablesPage /> },
+          { path: '/relances', element: <RelancesPage /> },
           { path: '/rapports', element: <RapportsPage /> },
           { path: '/creneaux', element: <SlotsPage /> },
           { path: '/rapport-du-jour', element: <DailyReportPage /> },

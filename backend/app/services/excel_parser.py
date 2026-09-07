@@ -91,6 +91,11 @@ class ParsedAction:
     description: str
     responsable_names: list[str]
     resp_suivi: str | None
+    #: La colonne E découpée en personnes, avec les mêmes règles que la
+    #: colonne D. `resp_suivi` reste la cellule brute — c'est elle qui
+    #: s'affiche et qui fait foi à la relecture ; cette liste est ce qui rend
+    #: le responsable de suivi joignable par email.
+    resp_suivi_names: list[str]
     progress: float
     spi: float | None
     otd: float | None
@@ -109,6 +114,7 @@ class ParsedAction:
             "description": self.description,
             "responsable_names": list(self.responsable_names),
             "resp_suivi": self.resp_suivi,
+            "resp_suivi_names": list(self.resp_suivi_names),
             "progress": self.progress,
             "spi": self.spi,
             "otd": self.otd,
@@ -633,6 +639,9 @@ def parse_workbook(
                         valeur(ligne, "responsables"), emails_connus
                     ),
                     resp_suivi=_nettoyer_nom(str(valeur(ligne, "resp_suivi") or "")) or None,
+                    resp_suivi_names=_parse_responsables(
+                        valeur(ligne, "resp_suivi"), emails_connus
+                    ),
                     progress=_pourcentage(cellule_de(ligne, "progress")),
                     spi=_ratio(cellule_de(ligne, "spi")),
                     otd=_ratio(cellule_de(ligne, "otd")),

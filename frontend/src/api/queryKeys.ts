@@ -42,6 +42,9 @@ export const queryKeys = {
   relances: {
     all: ['relances'] as const,
     config: ['relances', 'config'] as const,
+    myPreference: ['relances', 'preferences', 'me'] as const,
+    preferences: (tous: boolean) => ['relances', 'preferences', tous] as const,
+    digest: (id: Uuid) => ['relances', 'digest', id] as const,
   },
 
   slots: {
